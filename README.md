@@ -1,1 +1,1 @@
-# snowflake_ml_template
+# Snowflake ML Template

@@ -182,9 +182,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
@@ -205,3 +205,56 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Snowflake ML Template specific
+# Snowflake configuration
+.snowsql/
+snowsql.cnf
+
+# Data files
+*.csv
+*.json
+*.parquet
+*.xlsx
+data/
+datasets/
+
+# Model artifacts and ML runs
+models/
+artifacts/
+mlruns/
+mlflow/
+
+# Reports and monitoring
+reports/
+logs/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.tfvars
+
+# Docker
+.dockerignore
+
+# Jupyter and notebooks
+.jupyter/
+
+# Great Expectations
+great_expectations/uncommitted/
+
+# Security sensitive files
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+private_keys/
+
+# Environment specific configs
+config/local/
+.env.local
+.env.*.local
