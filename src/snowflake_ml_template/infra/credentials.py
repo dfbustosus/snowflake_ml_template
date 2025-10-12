@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Union, cast
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -83,13 +83,13 @@ def get_snowflake_session() -> Session:
     if missing_core:
         raise EnvironmentError(f"Missing Snowflake core env vars: {missing_core}")
 
-    # At this point, all core variables are guaranteed to be strings
-    assert account is not None
-    assert user is not None
-    assert warehouse is not None
-    assert database is not None
-    assert schema is not None
-    assert role is not None
+    # At this point, all core variables are guaranteed to be strings (validated above)
+    account = cast(str, account)
+    user = cast(str, user)
+    warehouse = cast(str, warehouse)
+    database = cast(str, database)
+    schema = cast(str, schema)
+    role = cast(str, role)
 
     # Prefer key-pair auth if key provided
     connection_parameters: Dict[str, Union[str, bytes]] = {
