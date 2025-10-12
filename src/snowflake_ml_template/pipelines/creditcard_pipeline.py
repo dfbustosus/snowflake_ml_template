@@ -5,6 +5,7 @@ into a raw VARIANT table, materializes a dynamic table, and merges data into
 the final structured table.
 """
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -26,6 +27,57 @@ class CreditCardPipeline:
         self.root_dir = Path(__file__).parents[3]
         self.ddl_dir = self.root_dir / "scripts" / "snowflake" / "ddl"
         self.pipeline_dir = self.root_dir / "scripts" / "snowflake" / "pipeline"
+
+    def _get_file_hash(self, file_path: str) -> str:
+        """Calculate SHA256 hash of a file to detect changes."""
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+
+    def _is_file_already_processed(self, file_path: str) -> bool:
+        """Check if this exact file has already been processed by comparing hashes."""
+        file_hash = self._get_file_hash(file_path)
+
+        # Check if we have a processed_files table, create if not exists
+        self.session.sql(
+            """
+            CREATE TABLE IF NOT EXISTS processed_files (
+                file_path STRING,
+                file_hash STRING,
+                processed_at TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+                PRIMARY KEY (file_path)
+            )
+        """
+        ).collect()
+
+        # Check if this file hash already exists
+        result = self.session.sql(
+            f"""  # nosec
+            SELECT COUNT(*) as count
+            FROM processed_files
+            WHERE file_hash = '{file_hash}'
+        """
+        ).collect()
+        return bool(result[0]["COUNT"]) if result else False
+
+    def _mark_file_as_processed(self, file_path: str) -> None:
+        """Mark a file as processed by storing its hash."""
+        file_hash = self._get_file_hash(file_path)
+
+        # Insert or update the processed file record
+        self.session.sql(
+            f"""  # nosec
+            MERGE INTO processed_files target
+            USING (SELECT '{file_path}' as file_path, '{file_hash}' as file_hash) source
+            ON target.file_path = source.file_path
+            WHEN MATCHED THEN
+                UPDATE SET file_hash = source.file_hash, processed_at = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN
+                INSERT (file_path, file_hash) VALUES (source.file_path, source.file_hash)
+        """
+        ).collect()
 
     def setup_schema(self) -> None:
         """Run DDL scripts to create file format, stage, tables, stream, and dynamic table."""
@@ -155,11 +207,24 @@ class CreditCardPipeline:
 
     def process_stream(self) -> None:
         """Process new rows from the dynamic table and merge into the final table."""
-        # First populate the dynamic table from raw data
-        logger.info("Populating dynamic table from raw data")
-        populate_sql = """
+        # Get the latest load_timestamp from raw table
+        latest_ts_result = self.session.sql(
+            "SELECT MAX(load_timestamp) as latest FROM raw_creditcard"
+        ).collect()
+        if not latest_ts_result or not latest_ts_result[0]["LATEST"]:
+            logger.warning("No data found in raw_creditcard table")
+            return
+
+        latest_load_timestamp = latest_ts_result[0]["LATEST"]
+        logger.info(f"Processing data from load timestamp: {latest_load_timestamp}")
+
+        # Clear dynamic table first to ensure clean state
+        self.session.sql("DELETE FROM creditcard_dynamic").collect()
+
+        # First populate the dynamic table from raw data - only from the latest load
+        populate_sql = f"""  # nosec
         INSERT INTO creditcard_dynamic
-        SELECT
+        SELECT DISTINCT
             load_timestamp,
             TRY_CAST(parsed:Time::STRING AS FLOAT) AS event_time,
             TRY_CAST(parsed:V1::STRING AS FLOAT) AS v1,
@@ -197,8 +262,8 @@ class CreditCardPipeline:
                 load_timestamp,
                 PARSE_JSON(content) AS parsed
             FROM raw_creditcard
+            WHERE load_timestamp = '{latest_load_timestamp}'
         )
-        WHERE load_timestamp NOT IN (SELECT load_timestamp FROM creditcard_dynamic)
         """
         self.session.sql(populate_sql).collect()
 
@@ -257,11 +322,33 @@ class CreditCardPipeline:
         logger.info("Merging from dynamic table into creditcard table")
         self.session.sql(merge_sql).collect()
 
-    def run_full_pipeline(self, local_file_path: str) -> None:
-        """Execute full pipeline: setup schema, ingest data, and process stream."""
-        self.setup_schema()
+    def run_full_pipeline(
+        self, local_file_path: str, incremental: bool = False
+    ) -> None:
+        """Execute full pipeline: setup schema, ingest data, and process stream.
+
+        Args:
+            local_file_path: Path to the CSV file to process
+            incremental: If True, skip schema setup and only process new data
+        """
+        # Check if file has already been processed
+        if self._is_file_already_processed(local_file_path):
+            logger.info(
+                f"File {local_file_path} has already been processed. Skipping pipeline."
+            )
+            return
+
+        logger.info(f"Processing new file: {local_file_path}")
+
+        if not incremental:
+            self.setup_schema()
+
         self.ingest_raw(local_file_path)
         self.process_stream()
+
+        # Mark file as processed
+        self._mark_file_as_processed(local_file_path)
+        logger.info(f"Successfully processed and marked file: {local_file_path}")
 
 
 if __name__ == "__main__":
@@ -271,7 +358,12 @@ if __name__ == "__main__":
         description="Run CreditCard data pipeline on Snowflake"
     )
     parser.add_argument("csv", help="Path to local creditcard CSV file")
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Skip schema setup and only process new data (requires existing tables)",
+    )
     args = parser.parse_args()
 
     pipeline = CreditCardPipeline()
-    pipeline.run_full_pipeline(args.csv)
+    pipeline.run_full_pipeline(args.csv, incremental=args.incremental)
