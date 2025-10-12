@@ -13,16 +13,30 @@ def test_creditcard_pipeline_runs_and_calls_session(monkeypatch, tmp_path):
             calls["put"].append((local, stage, overwrite))
 
     class FakeResult:
+        def __init__(self, data=None):
+            self.data = data or []
+
         def collect(self):
-            return []
+            return self.data
 
     class FakeSession:
         def __init__(self):
             self.file = FakeFileClient()
+            self.sql_count = 0
 
         def sql(self, stmt):
             calls["sql"].append(stmt)
-            return FakeResult()
+            self.sql_count += 1
+
+            # Mock different SQL responses based on the statement
+            if "SELECT MAX(load_timestamp) as latest FROM raw_creditcard" in stmt:
+                # Return a fake timestamp to simulate data exists
+                return FakeResult([{"LATEST": "2023-01-01 00:00:00"}])
+            elif "SELECT COUNT(*) as count FROM processed_files" in stmt:
+                # Return 0 to simulate file not processed yet
+                return FakeResult([{"COUNT": 0}])
+            else:
+                return FakeResult()
 
     # Monkeypatch the get_snowflake_session to return our fake session
     import importlib
