@@ -50,54 +50,6 @@ jobs:
             safety-report.json
             semgrep-report.json
 
-      - name: Comment PR with Security Summary
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Only run on pull requests
-            if (!context.payload.pull_request) {
-              console.log('Not a pull request, skipping comment');
-              return;
-            }
-
-            const fs = require('fs');
-            let comment = '## 🔒 Security Scan Results\n\n';
-
-            try {
-              // Bandit results
-              const banditData = JSON.parse(fs.readFileSync('bandit-report.json', 'utf8'));
-              const banditIssues = banditData.results?.length || 0;
-              comment += `**Bandit (SAST):** ${banditIssues} issues found\n`;
-
-              // Safety results
-              const safetyData = JSON.parse(fs.readFileSync('safety-report.json', 'utf8'));
-              const safetyVulns = safetyData.vulnerabilities?.length || 0;
-              comment += `**Safety (Dependencies):** ${safetyVulns} vulnerabilities found\n`;
-
-              // Semgrep results
-              const semgrepData = JSON.parse(fs.readFileSync('semgrep-report.json', 'utf8'));
-              const semgrepFindings = semgrepData.results?.length || 0;
-              comment += `**Semgrep (SAST):** ${semgrepFindings} findings\n`;
-
-              if (banditIssues > 0 || safetyVulns > 0 || semgrepFindings > 0) {
-                comment += '\n⚠️ Security issues detected. Please review the artifacts for details.';
-              } else {
-                comment += '\n✅ No security issues detected.';
-              }
-
-            } catch (error) {
-              comment += '\n❌ Error reading security scan results.';
-            }
-
-            // Use pull request number for commenting
-            github.rest.issues.createComment({
-              issue_number: context.payload.pull_request.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
-
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
