@@ -64,8 +64,20 @@ jobs:
 
       - name: Run TruffleHog
         uses: trufflesecurity/trufflehog@main
+        if: github.event_name == 'pull_request'
         with:
           path: ./
-          base: main
-          head: HEAD
+          # For PRs, compare the PR head against the base branch
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
           extra_args: --only-verified # Only report verified secrets, ignore unverified ones
+
+      - name: Run TruffleHog (push/schedule)
+        uses: trufflesecurity/trufflehog@main
+        if: github.event_name != 'pull_request'
+        with:
+          path: ./
+          # When running on push/main or scheduled scans, omit base/head so TruffleHog
+          # scans the filesystem/history without comparing identical commits which
+          # can happen on merged pushes and cause the 'BASE and HEAD commits are the same' error.
+          extra_args: --only-verified
