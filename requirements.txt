@@ -1,0 +1,33 @@
+# Core Snowflake dependencies
+snowflake-snowpark-python[localtest]>=1.15.0
+snowflake-ml-python>=1.3.0
+snowflake-connector-python>=3.7.0
+
+# Data processing and ML
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+plotly>=5.17.0
+joblib>=1.3.0
+
+# Configuration and validation
+pydantic>=2.0.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# CLI and utilities
+click>=8.1.0
+rich>=13.0.0
+structlog>=23.0.0
+
+# Data quality and validation
+great-expectations>=0.17.0
+
+# MLflow for experiment tracking
+mlflow>=2.8.0
+
+# Streamlit for demos and dashboards
+streamlit>=1.28.0
+
+# Testing and development (production installs should use pyproject.toml [dev] extras)
+fairlearn>=0.9.0
