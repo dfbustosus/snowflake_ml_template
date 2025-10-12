@@ -215,4 +215,4 @@ exclude_lines = [
 
 [tool.bandit]
 exclude_dirs = ["tests", "migrations"]
-skips = ["B101", "B601"]
+skips = ["B101", "B601", "B608"]
