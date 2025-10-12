@@ -180,7 +180,6 @@ addopts = [
     "--cov-report=xml",
     "--cov-report=html",
 ]
-pythonpath = ["src"]
 markers = [
     "unit: marks tests as unit tests",
     "integration: marks tests as integration tests",
