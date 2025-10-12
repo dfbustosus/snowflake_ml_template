@@ -53,7 +53,9 @@ jobs:
 
       - name: Run tests
         run: |
-          cd /home/runner/work/snowflake_ml_template/snowflake_ml_template && python -c "import sys; sys.path.insert(0, '/home/runner/work/snowflake_ml_template/snowflake_ml_template/src'); print(sys.path)" && python -m pytest tests/ -v --tb=short --cov=snowflake_ml_template --cov-report=xml --cov-report=term-missing      - name: Upload coverage to Codecov
+          python -m pytest tests/ -v --tb=short --cov=snowflake_ml_template --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v3
         with:
