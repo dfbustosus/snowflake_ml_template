@@ -7,11 +7,11 @@ unit tests can run in environments without Snowpark installed.
 from typing import Any
 
 
-def import_snowpark():
+def import_snowpark() -> tuple[Any, Any]:
     """Lazy import Snowpark types or raise a helpful error if unavailable."""
     try:
-        from snowflake.snowpark import DataFrame as _DataFrame  # type: ignore
-        from snowflake.snowpark import Session as _Session  # type: ignore
+        from snowflake.snowpark import DataFrame as _DataFrame
+        from snowflake.snowpark import Session as _Session
 
         return _DataFrame, _Session
     except Exception as exc:  # pragma: no cover - environment dependent
