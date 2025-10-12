@@ -18,8 +18,15 @@ class CustomFormatter(logging.Formatter):
         "RESET": "\033[0m",  # Reset
     }
 
-    def format(self, record):
-        """Format the log record with colors and timestamp."""
+    def format(self, record: logging.LogRecord) -> str:
+        """Format the log record with colors and timestamp.
+
+        Args:
+            record: The log record to format.
+
+        Returns:
+            The formatted log string including a timestamp.
+        """
         # Add color to the level name
         if record.levelname in self.COLORS:
             record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.COLORS['RESET']}"
