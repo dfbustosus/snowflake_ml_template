@@ -101,6 +101,21 @@ snowflake_ml_template/
 
 ## ⚙️ Configuration
 
+### Environment Variables
+
+Copy `.env.template` to `.env` and set the following variables:
+
+```dotenv
+SNOWFLAKE_ACCOUNT=your_account
+SNOWFLAKE_USER=your_user
+SNOWFLAKE_WAREHOUSE=your_warehouse
+SNOWFLAKE_DATABASE=your_database
+SNOWFLAKE_SCHEMA=your_schema
+SNOWFLAKE_ROLE=your_role
+SNOWFLAKE_PRIVATE_KEY_PATH=/path/to/your/private_key.p8
+SNOWFLAKE_PRIVATE_KEY_PASSPHRASE=your_key_passphrase (optional)
+```
+
 The project uses YAML configuration files for different environments. Copy and modify the templates:
 
 ```yaml
@@ -131,6 +146,24 @@ from snowflake_ml_template.ingest import DataIngestor
 ingestor = DataIngestor(config_path="config/environments/production.yaml")
 ingestor.ingest_data(source_table="RAW_DATA", target_table="PROCESSED_DATA")
 ```
+
+Notes about stages:
+
+- The default example in this repo creates an internal stage `ml_raw_stage` which
+  works with `session.file.put()` for uploading local files during development.
+- For production, prefer an external cloud stage (S3/Blob/GCS) and Snowpipe auto-ingest
+  to avoid PUT from clients. To switch, update `scripts/snowflake/ddl/02_create_stage.sql`
+  with the external URL and configure your cloud provider notifications and Snowpipe.
+
+Dynamic Tables and late-arriving data:
+
+- Dynamic Tables (Snowflake) require a TARGET_LAG setting which controls how long
+  the system waits for late-arriving events before producing stable results. Examples:
+  - TARGET_LAG = '1 HOUR'
+  - TARGET_LAG = '1 DAY'
+
+Tune this value based on your data source characteristics. If you need stricter
+reconciliation, consider bi-temporal modeling with event_timestamp and load_timestamp.
 
 ### Model Training
 
