@@ -127,4 +127,4 @@ def get_snowflake_session() -> Session:
         )
 
     # Build and return the Snowpark session
-    return Session.builder.configs(connection_parameters).create()
+    return cast(Session, Session.builder.configs(connection_parameters).create())
