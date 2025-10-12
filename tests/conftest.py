@@ -4,6 +4,7 @@ This module ensures the project's `src` directory is on Python's import
 path so test modules can import `snowflake_ml_template` directly during
 CI and local runs.
 """
+
 # Automatically add project src directory to sys.path for test imports
 import os
 import sys
