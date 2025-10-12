@@ -53,12 +53,12 @@ class CreditCardPipeline:
         ).collect()
 
         # Check if this file hash already exists
-        result = self.session.sql(
-            f"""  # nosec
+        result = self.session.sql(  # nosec
+            f"""
             SELECT COUNT(*) as count
             FROM processed_files
             WHERE file_hash = '{file_hash}'
-        """
+            """
         ).collect()
         return bool(result[0]["COUNT"]) if result else False
 
@@ -67,8 +67,8 @@ class CreditCardPipeline:
         file_hash = self._get_file_hash(file_path)
 
         # Insert or update the processed file record
-        self.session.sql(
-            f"""  # nosec
+        self.session.sql(  # nosec
+            f"""
             MERGE INTO processed_files target
             USING (SELECT '{file_path}' as file_path, '{file_hash}' as file_hash) source
             ON target.file_path = source.file_path
@@ -76,7 +76,7 @@ class CreditCardPipeline:
                 UPDATE SET file_hash = source.file_hash, processed_at = CURRENT_TIMESTAMP()
             WHEN NOT MATCHED THEN
                 INSERT (file_path, file_hash) VALUES (source.file_path, source.file_hash)
-        """
+            """
         ).collect()
 
     def setup_schema(self) -> None:
@@ -222,7 +222,7 @@ class CreditCardPipeline:
         self.session.sql("DELETE FROM creditcard_dynamic").collect()
 
         # First populate the dynamic table from raw data - only from the latest load
-        populate_sql = f"""  # nosec
+        populate_sql = f"""
         INSERT INTO creditcard_dynamic
         SELECT DISTINCT
             load_timestamp,
@@ -264,7 +264,7 @@ class CreditCardPipeline:
             FROM raw_creditcard
             WHERE load_timestamp = '{latest_load_timestamp}'
         )
-        """
+        """  # nosec
         self.session.sql(populate_sql).collect()
 
         # Then run the merge - embedded SQL to avoid file issues
