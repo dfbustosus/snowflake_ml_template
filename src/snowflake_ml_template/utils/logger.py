@@ -50,42 +50,45 @@ def setup_logger(name: str = "ua_leads") -> logging.Logger:
     """
     logger = logging.getLogger(name)
 
-    # Only set up handlers if they haven't been set up already
-    if not logger.handlers:
-        logger.setLevel(logging.DEBUG)
+    # Clear existing handlers to prevent duplication
+    if logger.handlers:
+        logger.handlers.clear()
 
-        # Try to create file handler, but fallback to console-only if it fails
-        # This handles cases where code runs from a ZIP file (e.g., Spark executors)
-        try:
-            # Create logs directory if it doesn't exist
-            logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False  # Prevent propagation to root logger
 
-            # Check if we're running from a ZIP file (Spark executors)
-            if not __file__.endswith(".zip"):
-                os.makedirs(logs_dir, exist_ok=True)
+    # Try to create file handler, but fallback to console-only if it fails
+    # This handles cases where code runs from a ZIP file (e.g., Spark executors)
+    try:
+        # Create logs directory if it doesn't exist
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 
-                # File handler - logs everything to a file
-                log_file = os.path.join(logs_dir, f"{name}.log")
-                file_handler = logging.FileHandler(log_file)
-                file_handler.setLevel(logging.DEBUG)
-                file_formatter = logging.Formatter(
-                    "%(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
-                )
-                file_handler.setFormatter(file_formatter)
-                logger.addHandler(file_handler)
-        except (OSError, NotADirectoryError):
-            # Running from ZIP or no write permissions - console only
-            # This is expected in Spark executors, so don't fail
-            pass
+        # Check if we're running from a ZIP file (Spark executors)
+        if not __file__.endswith(".zip"):
+            os.makedirs(logs_dir, exist_ok=True)
 
-        # Console handler - with colors (always add this)
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_formatter = CustomFormatter("%(levelname)s | %(message)s")
-        console_handler.setFormatter(console_formatter)
+            # File handler - logs everything to a file
+            log_file = os.path.join(logs_dir, f"{name}.log")
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.DEBUG)
+            file_formatter = logging.Formatter(
+                "%(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
+            )
+            file_handler.setFormatter(file_formatter)
+            logger.addHandler(file_handler)
+    except (OSError, NotADirectoryError):
+        # Running from ZIP or no write permissions - console only
+        # This is expected in Spark executors, so don't fail
+        pass
 
-        # Add console handler to logger
-        logger.addHandler(console_handler)
+    # Console handler - with colors (always add this)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = CustomFormatter("%(levelname)s | %(message)s")
+    console_handler.setFormatter(console_formatter)
+
+    # Add console handler to logger
+    logger.addHandler(console_handler)
 
     return logger
 

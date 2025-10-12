@@ -25,8 +25,8 @@ repos:
     rev: v1.5.1
     hooks:
       - id: mypy
-        # additional_dependencies: [types-all]  # removed - types-all pulls types-pkg-resources which isn't available on some platforms
-        args: [--ignore-missing-imports]
+        args: [--config-file, pyproject.toml]
+        files: ^src/
 
   # Security scanning
   - repo: https://github.com/PyCQA/bandit
@@ -69,9 +69,11 @@ repos:
       - id: sqlfluff-lint
         files: \.sql$
         args: [--dialect, snowflake]
+        additional_dependencies: ["click==8.1.7"]
       - id: sqlfluff-fix
         files: \.sql$
         args: [--dialect, snowflake]
+        additional_dependencies: ["click==8.1.7"]
 
   # Documentation
   - repo: https://github.com/pycqa/pydocstyle

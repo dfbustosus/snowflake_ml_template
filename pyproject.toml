@@ -162,6 +162,8 @@ module = [
     "great_expectations.*",
     "plotly.*",
     "streamlit.*",
+    "cryptography.*",
+    "dotenv",
 ]
 ignore_missing_imports = true
 
