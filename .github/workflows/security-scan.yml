@@ -109,3 +109,4 @@ jobs:
           path: ./
           base: main
           head: HEAD
+          extra_args: --only-verified # Only report verified secrets, ignore unverified ones

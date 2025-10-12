@@ -1,0 +1,34 @@
+# TruffleHog ignore file
+# Exclude common false positives
+
+# GitHub Actions workflows (contain ${{ secrets.GITHUB_TOKEN }} references)
+.github/
+
+# Documentation build artifacts
+docs/_build/
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Test files that may contain mock secrets
+tests/test_mocks.py
+
+# Package metadata
+*.egg-info/
+dist/
+build/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
