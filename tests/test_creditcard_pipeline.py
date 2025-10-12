@@ -45,7 +45,7 @@ def test_creditcard_pipeline_runs_and_calls_session(monkeypatch, tmp_path):
     pipeline_dir.mkdir(parents=True, exist_ok=True)
 
     # Add a simple DDL and pipeline SQL file
-    (ddl_dir / "00_test_ddl.sql").write_text(
+    (ddl_dir / "01_test_ddl.sql").write_text(
         "CREATE OR REPLACE TABLE test_dummy (id INT);"
     )
     (pipeline_dir / "01_copy_into_raw.sql").write_text("-- copy sql")
@@ -66,8 +66,8 @@ def test_creditcard_pipeline_runs_and_calls_session(monkeypatch, tmp_path):
     assert put_call[0] == str(csv)
     assert put_call[1] == "@ml_raw_stage"
 
-    # Assertions: SQL was executed (at least the DDL and the two pipeline statements)
+    # Assertions: SQL was executed (at least the DDL and the embedded pipeline statements)
     executed = " ".join(calls["sql"]) if calls["sql"] else ""
     assert "CREATE OR REPLACE TABLE test_dummy" in executed
-    assert "-- copy sql" in executed
-    assert "-- merge sql" in executed
+    assert "COPY INTO raw_creditcard" in executed
+    assert "MERGE INTO creditcard" in executed

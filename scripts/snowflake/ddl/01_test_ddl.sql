@@ -1,0 +1,1 @@
+CREATE OR REPLACE TABLE test_dummy (id INT);
