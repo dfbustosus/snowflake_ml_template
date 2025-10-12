@@ -40,17 +40,20 @@ jobs:
         run: |
           python -m pip install -e .
 
-      - name: Check import paths
+      - name: Debug paths and config
         run: |
-          python -c "import sys; print(sys.path)"
-          python -c "import os; print(os.listdir('.'))"
-          python -c "import os; print(os.listdir('src'))"
+          echo "Current directory contents:"
+          ls -la
+          echo "Source directory contents:"
+          ls -la src/
+          echo "Looking for conftest.py:"
+          find . -name "conftest.py" -type f
+          echo "Contents of conftest.py:"
+          cat conftest.py
 
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --tb=short --cov=snowflake_ml_template --cov-report=xml --cov-report=term-missing
-
-      - name: Upload coverage to Codecov
+          cd /home/runner/work/snowflake_ml_template/snowflake_ml_template && python -c "import sys; sys.path.insert(0, '/home/runner/work/snowflake_ml_template/snowflake_ml_template/src'); print(sys.path)" && python -m pytest tests/ -v --tb=short --cov=snowflake_ml_template --cov-report=xml --cov-report=term-missing      - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v3
         with:
