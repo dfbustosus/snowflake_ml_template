@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Dict, Union
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 from snowflake.snowpark import Session
 
 
-def _load_env_from_locations():
+def _load_env_from_locations() -> None:
     """Try loading a .env file from several sensible locations.
 
     Order of precedence:
@@ -82,8 +83,16 @@ def get_snowflake_session() -> Session:
     if missing_core:
         raise EnvironmentError(f"Missing Snowflake core env vars: {missing_core}")
 
+    # At this point, all core variables are guaranteed to be strings
+    assert account is not None
+    assert user is not None
+    assert warehouse is not None
+    assert database is not None
+    assert schema is not None
+    assert role is not None
+
     # Prefer key-pair auth if key provided
-    connection_parameters = {
+    connection_parameters: Dict[str, Union[str, bytes]] = {
         "account": account,
         "user": user,
         "warehouse": warehouse,

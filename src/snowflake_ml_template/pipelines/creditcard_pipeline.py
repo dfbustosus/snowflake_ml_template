@@ -18,7 +18,7 @@ from snowflake_ml_template.utils.logger import logger
 class CreditCardPipeline:
     """Orchestrates ingestion and processing of the creditcard dataset."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the pipeline and create a Snowpark session."""
         # Initialize Snowpark session
         self.session: Session = get_snowflake_session()
@@ -27,7 +27,7 @@ class CreditCardPipeline:
         self.ddl_dir = self.root_dir / "scripts" / "snowflake" / "ddl"
         self.pipeline_dir = self.root_dir / "scripts" / "snowflake" / "pipeline"
 
-    def setup_schema(self):
+    def setup_schema(self) -> None:
         """Run DDL scripts to create file format, stage, tables, stream, and dynamic table."""
         # Ensure database and schema exist
         database = os.getenv("SNOWFLAKE_DATABASE")
@@ -97,7 +97,7 @@ class CreditCardPipeline:
                         logger.error(f"Statement was: {stmt}")
                         raise
 
-    def ingest_raw(self, local_file_path: str):
+    def ingest_raw(self, local_file_path: str) -> None:
         """Upload a local CSV file into Snowflake stage and copy into the raw table."""
         stage_path = "@ml_raw_stage"
         logger.info(f"Uploading {local_file_path} to stage {stage_path}")
@@ -153,7 +153,7 @@ class CreditCardPipeline:
         logger.info("Copying data into raw_creditcard")
         self.session.sql(copy_sql).collect()
 
-    def process_stream(self):
+    def process_stream(self) -> None:
         """Process new rows from the dynamic table and merge into the final table."""
         # First populate the dynamic table from raw data
         logger.info("Populating dynamic table from raw data")
@@ -257,7 +257,7 @@ class CreditCardPipeline:
         logger.info("Merging from dynamic table into creditcard table")
         self.session.sql(merge_sql).collect()
 
-    def run_full_pipeline(self, local_file_path: str):
+    def run_full_pipeline(self, local_file_path: str) -> None:
         """Execute full pipeline: setup schema, ingest data, and process stream."""
         self.setup_schema()
         self.ingest_raw(local_file_path)
