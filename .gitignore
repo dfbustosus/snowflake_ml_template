@@ -258,3 +258,4 @@ private_keys/
 config/local/
 .env.local
 .env.*.local
+*.ipynb

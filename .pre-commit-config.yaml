@@ -69,9 +69,11 @@ repos:
       - id: sqlfluff-lint
         files: \.sql$
         args: [--dialect, snowflake]
+        additional_dependencies: ["click==8.1.7"]
       - id: sqlfluff-fix
         files: \.sql$
         args: [--dialect, snowflake]
+        additional_dependencies: ["click==8.1.7"]
 
   # Documentation
   - repo: https://github.com/pycqa/pydocstyle
