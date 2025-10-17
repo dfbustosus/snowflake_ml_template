@@ -1,0 +1,398 @@
+"""Feature version management following semantic versioning.
+
+This module implements version management for feature views, supporting:
+- Semantic versioning (MAJOR.MINOR.PATCH)
+- Version comparison and validation
+- Version lifecycle management
+- Immutable version guarantees
+"""
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from snowflake.snowpark import Session
+
+from snowflake_ml_template.core.exceptions import FeatureVersionError
+from snowflake_ml_template.feature_store.core.feature_view import FeatureView
+from snowflake_ml_template.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class VersionMetadata:
+    """Metadata for a feature view version.
+
+    Attributes:
+        version: Semantic version string (e.g., "1.2.3")
+        feature_view_name: Name of the feature view
+        created_at: When this version was created
+        created_by: User who created this version
+        description: Optional description of changes
+        schema_hash: Hash of the feature schema for change detection
+        deprecated: Whether this version is deprecated
+        deprecated_at: When this version was deprecated
+    """
+
+    version: str
+    feature_view_name: str
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_by: Optional[str] = None
+    description: Optional[str] = None
+    schema_hash: Optional[str] = None
+    deprecated: bool = False
+    deprecated_at: Optional[datetime] = None
+
+    def __post_init__(self) -> None:
+        """Validate version format."""
+        if not self._is_valid_semver(self.version):
+            raise FeatureVersionError(
+                f"Invalid semantic version: {self.version}. "
+                "Must follow MAJOR.MINOR.PATCH format (e.g., 1.2.3)"
+            )
+
+    @staticmethod
+    def _is_valid_semver(version: str) -> bool:
+        """Validate semantic version format."""
+        pattern = r"^\d+\.\d+\.\d+$"
+        return bool(re.match(pattern, version))
+
+    def get_major_minor_patch(self) -> Tuple[int, int, int]:
+        """Parse version into major, minor, patch components."""
+        parts = self.version.split(".")
+        return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+class FeatureVersionManager:
+    """Manage feature view versions with semantic versioning.
+
+    This class provides comprehensive version management following semantic
+    versioning principles:
+    - MAJOR: Incompatible schema changes
+    - MINOR: Backward-compatible functionality additions
+    - PATCH: Backward-compatible bug fixes
+
+    All versions are immutable once created, ensuring reproducibility.
+
+    Attributes:
+        session: Snowflake session
+        database: Database containing feature store
+        schema: Schema containing feature store
+        logger: Structured logger
+
+    Example:
+        >>> manager = FeatureVersionManager(session, "ML_PROD_DB", "FEATURES")
+        >>>
+        >>> # Create new version
+        >>> manager.create_version(
+        ...     feature_view,
+        ...     version="1.0.0",
+        ...     description="Initial release"
+        ... )
+        >>>
+        >>> # List versions
+        >>> versions = manager.list_versions("customer_features")
+        >>>
+        >>> # Compare versions
+        >>> diff = manager.compare_versions("customer_features", "1.0.0", "1.1.0")
+    """
+
+    def __init__(self, session: Session, database: str, schema: str):
+        """Initialize the version manager.
+
+        Args:
+            session: Active Snowflake session
+            database: Database containing feature store
+            schema: Schema containing feature store
+
+        Raises:
+            ValueError: If session, database, or schema is invalid
+        """
+        if session is None:
+            raise ValueError("Session cannot be None")
+        if not database or not schema:
+            raise ValueError("Database and schema cannot be empty")
+
+        self.session = session
+        self.database = database
+        self.schema = schema
+        self.logger = get_logger(__name__)
+
+        self._ensure_version_table_exists()
+
+    def _ensure_version_table_exists(self) -> None:
+        """Create version metadata table if it doesn't exist."""
+        sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.database}.{self.schema}.FEATURE_VERSION_METADATA (
+            feature_view_name VARCHAR NOT NULL,
+            version VARCHAR NOT NULL,
+            created_at TIMESTAMP_NTZ NOT NULL,
+            created_by VARCHAR,
+            description VARCHAR,
+            schema_hash VARCHAR,
+            deprecated BOOLEAN DEFAULT FALSE,
+            deprecated_at TIMESTAMP_NTZ,
+            feature_names ARRAY,
+            entity_names ARRAY,
+            PRIMARY KEY (feature_view_name, version)
+        )
+        """
+        self.session.sql(sql).collect()
+
+    def create_version(
+        self,
+        feature_view: FeatureView,
+        version: str,
+        description: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> VersionMetadata:
+        """Create a new version of a feature view.
+
+        This method creates an immutable version of a feature view. Once
+        created, the version cannot be modified, ensuring reproducibility.
+
+        Args:
+            feature_view: FeatureView to version
+            version: Semantic version string (e.g., "1.0.0")
+            description: Optional description of changes
+            created_by: Optional user who created this version
+
+        Returns:
+            VersionMetadata for the created version
+
+        Raises:
+            FeatureVersionError: If version already exists or is invalid
+
+        Example:
+            >>> metadata = manager.create_version(
+            ...     customer_features,
+            ...     version="1.0.0",
+            ...     description="Initial release with transaction aggregates"
+            ... )
+        """
+        # Validate version doesn't already exist
+        if self.version_exists(feature_view.name, version):
+            raise FeatureVersionError(
+                f"Version {version} of feature view '{feature_view.name}' already exists. "
+                "Versions are immutable and cannot be overwritten."
+            )
+
+        # Create metadata
+        metadata = VersionMetadata(
+            version=version,
+            feature_view_name=feature_view.name,
+            created_by=created_by,
+            description=description,
+            schema_hash=self._compute_schema_hash(feature_view),
+        )
+
+        # Store in metadata table
+        self._store_version_metadata(feature_view, metadata)
+
+        self.logger.info(
+            f"Created version {version} for {feature_view.name}",
+            extra={"version": version, "feature_view": feature_view.name},
+        )
+
+        return metadata
+
+    def _compute_schema_hash(self, feature_view: FeatureView) -> str:
+        """Compute hash of feature schema for change detection."""
+        import hashlib
+
+        # Create deterministic string from schema
+        schema_str = "|".join(sorted(feature_view.feature_names))
+        return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
+
+    def _store_version_metadata(
+        self, feature_view: FeatureView, metadata: VersionMetadata
+    ) -> None:
+        """Store version metadata in Snowflake."""
+        sql = f"""
+        INSERT INTO {self.database}.{self.schema}.FEATURE_VERSION_METADATA
+        (feature_view_name, version, created_at, created_by, description,
+         schema_hash, feature_names, entity_names)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        self.session.sql(sql).bind(
+            metadata.feature_view_name,
+            metadata.version,
+            metadata.created_at,
+            metadata.created_by,
+            metadata.description,
+            metadata.schema_hash,
+            feature_view.feature_names,
+            feature_view.get_entity_names(),
+        ).collect()
+
+    def list_versions(
+        self, feature_view_name: str, include_deprecated: bool = False
+    ) -> List[str]:
+        """List all versions of a feature view.
+
+        Args:
+            feature_view_name: Name of the feature view
+            include_deprecated: Whether to include deprecated versions
+
+        Returns:
+            List of version strings, sorted by semantic version
+
+        Example:
+            >>> versions = manager.list_versions("customer_features")
+            >>> # ['1.0.0', '1.0.1', '1.1.0', '2.0.0']
+        """
+        sql = f"""
+        SELECT version
+        FROM {self.database}.{self.schema}.FEATURE_VERSION_METADATA
+        WHERE feature_view_name = ?
+        """
+
+        if not include_deprecated:
+            sql += " AND deprecated = FALSE"
+
+        sql += " ORDER BY version"
+
+        result = self.session.sql(sql).bind(feature_view_name).collect()
+        versions = [row["VERSION"] for row in result]
+
+        # Sort by semantic version
+        return self._sort_versions(versions)
+
+    def _sort_versions(self, versions: List[str]) -> List[str]:
+        """Sort versions by semantic versioning rules."""
+
+        def version_key(v: str) -> Tuple[int, int, int]:
+            parts = v.split(".")
+            return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+        return sorted(versions, key=version_key)
+
+    def get_latest_version(self, feature_view_name: str) -> Optional[str]:
+        """Get the latest non-deprecated version.
+
+        Args:
+            feature_view_name: Name of the feature view
+
+        Returns:
+            Latest version string, or None if no versions exist
+        """
+        versions = self.list_versions(feature_view_name, include_deprecated=False)
+        return versions[-1] if versions else None
+
+    def version_exists(self, feature_view_name: str, version: str) -> bool:
+        """Check if a version exists.
+
+        Args:
+            feature_view_name: Name of the feature view
+            version: Version string to check
+
+        Returns:
+            True if version exists, False otherwise
+        """
+        sql = f"""
+        SELECT COUNT(*) as count
+        FROM {self.database}.{self.schema}.FEATURE_VERSION_METADATA
+        WHERE feature_view_name = ? AND version = ?
+        """
+
+        result = self.session.sql(sql).bind(feature_view_name, version).collect()
+        count: int = result[0]["COUNT"]
+        return count > 0
+
+    def deprecate_version(
+        self, feature_view_name: str, version: str, reason: Optional[str] = None
+    ) -> None:
+        """Mark a version as deprecated.
+
+        Deprecated versions are not deleted but are excluded from default
+        queries. This maintains lineage while discouraging use.
+
+        Args:
+            feature_view_name: Name of the feature view
+            version: Version to deprecate
+            reason: Optional reason for deprecation
+
+        Raises:
+            FeatureVersionError: If version doesn't exist
+        """
+        if not self.version_exists(feature_view_name, version):
+            raise FeatureVersionError(
+                f"Version {version} does not exist for {feature_view_name}"
+            )
+
+        sql = f"""
+        UPDATE {self.database}.{self.schema}.FEATURE_VERSION_METADATA
+        SET deprecated = TRUE, deprecated_at = CURRENT_TIMESTAMP()
+        WHERE feature_view_name = ? AND version = ?
+        """
+
+        self.session.sql(sql).bind(feature_view_name, version).collect()
+
+        self.logger.warning(
+            f"Deprecated version {version} of {feature_view_name}",
+            extra={
+                "version": version,
+                "feature_view": feature_view_name,
+                "reason": reason,
+            },
+        )
+
+    def compare_versions(
+        self, feature_view_name: str, version1: str, version2: str
+    ) -> Dict[str, Any]:
+        """Compare two versions and return differences.
+
+        Args:
+            feature_view_name: Name of the feature view
+            version1: First version to compare
+            version2: Second version to compare
+
+        Returns:
+            Dictionary with comparison results
+
+        Example:
+            >>> diff = manager.compare_versions("customer_features", "1.0.0", "1.1.0")
+            >>> # {
+            >>> #     'version_diff': (1, 0, 0) -> (1, 1, 0),
+            >>> #     'schema_changed': True,
+            >>> #     'features_added': ['new_feature'],
+            >>> #     'features_removed': []
+            >>> # }
+        """
+        # Get metadata for both versions
+        sql = f"""
+        SELECT version, schema_hash, feature_names
+        FROM {self.database}.{self.schema}.FEATURE_VERSION_METADATA
+        WHERE feature_view_name = ? AND version IN (?, ?)
+        """
+
+        result = (
+            self.session.sql(sql).bind(feature_view_name, version1, version2).collect()
+        )
+
+        if len(result) != 2:
+            raise FeatureVersionError(
+                f"Could not find both versions for comparison of feature view '{feature_view_name}'"
+            )
+
+        v1_data = next(r for r in result if r["VERSION"] == version1)
+        v2_data = next(r for r in result if r["VERSION"] == version2)
+
+        # Compare schemas
+        schema_changed = v1_data["SCHEMA_HASH"] != v2_data["SCHEMA_HASH"]
+
+        # Compare features
+        features1 = set(v1_data["FEATURE_NAMES"])
+        features2 = set(v2_data["FEATURE_NAMES"])
+
+        return {
+            "version1": version1,
+            "version2": version2,
+            "schema_changed": schema_changed,
+            "features_added": list(features2 - features1),
+            "features_removed": list(features1 - features2),
+            "features_common": list(features1 & features2),
+        }
