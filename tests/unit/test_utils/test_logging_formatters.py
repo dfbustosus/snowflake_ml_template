@@ -1,4 +1,5 @@
 """Unit tests for logging formatters."""
+
 import json
 import logging
 

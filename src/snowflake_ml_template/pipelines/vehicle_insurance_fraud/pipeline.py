@@ -6,6 +6,7 @@ Implements a complete fraud detection workflow including:
 - Deployment for batch and real-time scoring
 - Monitoring for drift and performance metrics
 """
+
 from typing import Any, Dict
 
 from snowflake.snowpark.functions import avg, col, count, datediff

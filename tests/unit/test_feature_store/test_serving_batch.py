@@ -1,4 +1,5 @@
 """Unit tests for batch feature server."""
+
 import pytest
 
 from snowflake_ml_template.core.exceptions.errors import FeatureStoreError

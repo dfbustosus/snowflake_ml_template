@@ -1,4 +1,5 @@
 """Unit tests for database provisioning."""
+
 import pytest
 
 from snowflake_ml_template.core.exceptions.errors import ConfigurationError

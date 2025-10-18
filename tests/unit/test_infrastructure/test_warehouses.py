@@ -1,4 +1,5 @@
 """Unit tests for warehouses."""
+
 import pytest
 
 from snowflake_ml_template.core.exceptions import ConfigurationError
