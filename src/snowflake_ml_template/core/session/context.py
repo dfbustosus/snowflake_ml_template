@@ -10,6 +10,7 @@ Classes:
 from typing import Any, Literal, Optional
 
 from snowflake_ml_template.core.session.manager import SessionManager
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
 class SessionContext:
@@ -66,8 +67,6 @@ class SessionContext:
             database: Optional database to use in this context
             schema: Optional schema to use in this context
 
-        Raises:
-            ValueError: If schema is specified without database
         """
         if schema and not database:
             raise ValueError("Schema cannot be specified without database")
@@ -80,29 +79,10 @@ class SessionContext:
         self._previous_database: Optional[str] = None
         self._previous_schema: Optional[str] = None
 
-        self._logger = self._get_logger()
+        self._logger: StructuredLogger = self._create_logger()
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _create_logger(self) -> StructuredLogger:
+        return get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 
     def __enter__(self) -> "SessionContext":
         """Enter the context manager.
@@ -134,6 +114,9 @@ class SessionContext:
                 + (f", schema: {self.schema}" if self.schema else "")
             )
             SessionManager.switch_database(self.database, self.schema)
+        elif self.schema:
+            self._logger.debug(f"Switching to schema: {self.schema}")
+            SessionManager.switch_schema(self.schema)
 
         return self
 
@@ -172,6 +155,9 @@ class SessionContext:
                 SessionManager.switch_database(
                     self._previous_database, self._previous_schema
                 )
+            elif self.schema and self._previous_schema:
+                self._logger.debug(f"Restoring schema: {self._previous_schema}")
+                SessionManager.switch_schema(self._previous_schema)
 
             if self.warehouse and self._previous_warehouse:
                 self._logger.debug(f"Restoring warehouse: {self._previous_warehouse}")
