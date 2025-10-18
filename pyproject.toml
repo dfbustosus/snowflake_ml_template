@@ -166,6 +166,10 @@ module = [
     "dotenv",
     "pydantic.*",
     "yaml",
+    "joblib",
+    "lightgbm",
+    "xgboost",
+    "sklearn.*",
 ]
 ignore_missing_imports = true
 
