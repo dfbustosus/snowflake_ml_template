@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -94,27 +96,9 @@ class ConfigLoader:
             f"Initialized ConfigLoader: dir={self.config_dir}, env={environment}"
         )
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the loader."""
+        return get_logger(__name__)
 
     def load(
         self,
