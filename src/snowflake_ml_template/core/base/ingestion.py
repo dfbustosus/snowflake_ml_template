@@ -17,6 +17,8 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
+
 if TYPE_CHECKING:
     from snowflake.snowpark import Session
 
@@ -202,31 +204,14 @@ class BaseIngestionStrategy(ABC):
             raise ValueError("Config cannot be None")
 
         self.config = config
-        self.logger = self._get_logger()
+        self.logger: StructuredLogger = self._get_logger()
         # Internal session handle; subclasses may provide their own property wrappers
         self._session: Optional["Session"] = None
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the ingestion strategy."""
+        logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        return get_logger(logger_name)
 
     @abstractmethod
     def ingest(self, source: DataSource, target: str, **kwargs: Any) -> IngestionResult:

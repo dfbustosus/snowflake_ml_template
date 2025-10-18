@@ -18,6 +18,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
+
 
 class DeploymentStrategy(Enum):
     """Enumeration of supported deployment strategies."""
@@ -130,7 +132,16 @@ class DeploymentResult:
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
         if self.start_time and self.end_time:
-            delta = self.end_time - self.start_time
+            start = self.start_time
+            end = self.end_time
+
+            if (start.tzinfo is None) != (end.tzinfo is None):
+                if start.tzinfo is not None:
+                    start = start.replace(tzinfo=None)
+                if end.tzinfo is not None:
+                    end = end.replace(tzinfo=None)
+
+            delta = end - start
             self.duration_seconds = delta.total_seconds()
 
 
@@ -174,29 +185,12 @@ class BaseDeploymentStrategy(ABC):
             raise ValueError("Config cannot be None")
 
         self.config = config
-        self.logger = self._get_logger()
+        self.logger: StructuredLogger = self._get_logger()
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the deployment strategy."""
+        logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        return get_logger(logger_name)
 
     @abstractmethod
     def deploy(self, **kwargs: Any) -> DeploymentResult:

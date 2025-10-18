@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional
 
 from snowflake.snowpark import Session
 
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
+
 
 class PipelineStage(Enum):
     """Enumeration of pipeline execution stages.
@@ -130,7 +132,16 @@ class PipelineResult:
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
         if self.start_time and self.end_time:
-            delta = self.end_time - self.start_time
+            start = self.start_time
+            end = self.end_time
+
+            if (start.tzinfo is None) != (end.tzinfo is None):
+                if start.tzinfo is not None:
+                    start = start.replace(tzinfo=None)
+                if end.tzinfo is not None:
+                    end = end.replace(tzinfo=None)
+
+            delta = end - start
             self.duration_seconds = delta.total_seconds()
 
 
@@ -190,31 +201,12 @@ class BasePipeline(ABC):
         self._start_time: Optional[datetime] = None
         self._stages_completed: List[str] = []
 
-        # Logger will be initialized in Day 3
-        # For now, we'll use a placeholder
-        self.logger = self._get_logger()
+        self.logger: StructuredLogger = self._get_logger()
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the pipeline."""
+        logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        return get_logger(logger_name)
 
     def execute(self) -> PipelineResult:
         """Execute the complete ML pipeline.
