@@ -29,17 +29,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 
-# Napoleon settings (Google-style docstrings)
-napoleon_google_docstring = True
-napoleon_numpy_docstring = False
-
-# HTML output
-html_theme = "sphinx_rtd_theme"
-html_static_path = ["_static"]
-
-# When building docs in environments that don't have heavy runtime
-# dependencies (pandas, google-cloud, flytekit) installed, mock them so
-# autodoc can import modules and still render docstrings.
+# Exclude non-existent modules from documentation
 autodoc_mock_imports = [
     "pandas",
     "google",
@@ -48,7 +38,29 @@ autodoc_mock_imports = [
     "flytekit",
     "flytekitplugins",
     "pyspark",
+    "snowflake",
+    "snowflake.snowpark",
+    "snowflake.connector",
+    "snowflake.ml",
+    "snowflake.snowpark.functions",
+    "snowflake_ml_python",
+    "joblib",
+    "lightgbm",
+    "xgboost",
+    "sklearn",
+    "sklearn.ensemble",
+    "sklearn.linear_model",
+    "pydantic",
+    "yaml",
 ]
+
+# Napoleon settings (Google-style docstrings)
+napoleon_google_docstring = True
+napoleon_numpy_docstring = False
+
+# HTML output
+html_theme = "sphinx_rtd_theme"
+html_static_path = ["_static"]
 
 # Intersphinx mapping (optional)
 intersphinx_mapping = {
