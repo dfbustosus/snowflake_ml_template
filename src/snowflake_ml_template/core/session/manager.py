@@ -452,13 +452,14 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        warehouse = session.get_current_warehouse()
-        if warehouse is None or isinstance(warehouse, str):
-            return warehouse
-        if isinstance(warehouse, Mock):  # pragma: no cover - used in unit tests
-            return cast(Optional[str], warehouse.return_value)
+        warehouse_raw: Any = session.get_current_warehouse()
+        if isinstance(warehouse_raw, Mock):  # pragma: no cover - used in unit tests
+            return cast(Optional[str], warehouse_raw.return_value)
+        if warehouse_raw is None or isinstance(warehouse_raw, str):
+            return warehouse_raw
         raise TypeError(
-            "Expected warehouse to be str or None, " f"got {type(warehouse).__name__}"
+            "Expected warehouse to be str or None, "
+            f"got {type(warehouse_raw).__name__}"
         )
 
     @classmethod
@@ -472,13 +473,13 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        database = session.get_current_database()
-        if database is None or isinstance(database, str):
-            return database
-        if isinstance(database, Mock):  # pragma: no cover - used in unit tests
-            return cast(Optional[str], database.return_value)
+        database_raw: Any = session.get_current_database()
+        if isinstance(database_raw, Mock):  # pragma: no cover - used in unit tests
+            return cast(Optional[str], database_raw.return_value)
+        if database_raw is None or isinstance(database_raw, str):
+            return database_raw
         raise TypeError(
-            "Expected database to be str or None, " f"got {type(database).__name__}"
+            "Expected database to be str or None, " f"got {type(database_raw).__name__}"
         )
 
     @classmethod
@@ -492,13 +493,13 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        schema = session.get_current_schema()
-        if schema is None or isinstance(schema, str):
-            return schema
-        if isinstance(schema, Mock):  # pragma: no cover - used in unit tests
-            return cast(Optional[str], schema.return_value)
+        schema_raw: Any = session.get_current_schema()
+        if isinstance(schema_raw, Mock):  # pragma: no cover - used in unit tests
+            return cast(Optional[str], schema_raw.return_value)
+        if schema_raw is None or isinstance(schema_raw, str):
+            return schema_raw
         raise TypeError(
-            "Expected schema to be str or None, " f"got {type(schema).__name__}"
+            "Expected schema to be str or None, " f"got {type(schema_raw).__name__}"
         )
 
     @classmethod
