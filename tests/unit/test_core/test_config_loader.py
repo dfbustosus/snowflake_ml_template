@@ -1,6 +1,7 @@
 """Tests for config loader."""
 
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ class DummyConfig(BaseModel):
     """Dummy config for testing."""
 
     key: str
-    nested: dict | None = None
+    nested: Optional[dict] = None
 
 
 def _write_yaml(path: Path, content: str) -> None:
