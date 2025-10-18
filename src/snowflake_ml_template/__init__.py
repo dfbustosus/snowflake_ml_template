@@ -7,10 +7,15 @@ so that unit tests and static analysis run without a Snowflake connection.
 """
 
 __all__ = [
-    "infra",
+    "core",
+    "deployment",
     "feature_store",
-    "models",
-    "training",
+    "infrastructure",
+    "ingestion",
+    "monitoring",
+    "orchestration",
     "pipelines",
+    "registry",
+    "training",
     "utils",
 ]

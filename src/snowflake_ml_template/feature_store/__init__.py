@@ -13,42 +13,43 @@ Key Components:
 - Automated lineage and governance
 
 Example Usage:
-    from snowflake_ml_template.feature_store import FeatureStore, Entity, FeatureView
 
-    # Initialize feature store
-    fs = FeatureStore(session=session, database="ML_PROD_DB", schema="FEATURES")
+    >>> from snowflake_ml_template.feature_store import FeatureStore, Entity, FeatureView
 
-    # Define entity
-    customer_entity = Entity(
-        name="CUSTOMER",
-        join_keys=["CUSTOMER_ID"],
-        description="Customer entity for ML features"
-    )
-    fs.register_entity(customer_entity)
+    >>> # Initialize feature store
+    >>> fs = FeatureStore(session=session, database="ML_PROD_DB", schema="FEATURES")
 
-    # Create feature view
-    source_df = session.table("RAW_TRANSACTIONS")
-    feature_df = source_df.group_by("CUSTOMER_ID").agg(
-        count("*").alias("transaction_count"),
-        sum("AMOUNT").alias("total_amount")
-    )
+    >>> # Define entity
+    >>> customer_entity = Entity(
+    ...     name="CUSTOMER",
+    ...     join_keys=["CUSTOMER_ID"],
+    ...     description="Customer entity for ML features"
+    ... )
+    >>> fs.register_entity(customer_entity)
 
-    customer_features = FeatureView(
-        name="CUSTOMER_TRANSACTION_FEATURES",
-        entities=[customer_entity],
-        feature_df=feature_df,
-        refresh_freq="1 day",
-        description="Customer transaction summary features"
-    )
-    fs.register_feature_view(customer_features)
+    >>> # Create feature view
+    >>> source_df = session.table("RAW_TRANSACTIONS")
+    >>> feature_df = source_df.group_by("CUSTOMER_ID").agg(
+    ...     count("*").alias("transaction_count"),
+    ...     sum("AMOUNT").alias("total_amount")
+    ... )
 
-    # Generate training data with point-in-time correctness
-    spine_df = session.table("CUSTOMER_LABELS")
-    training_data = fs.generate_dataset(
-        spine_df=spine_df,
-        feature_views=["CUSTOMER_TRANSACTION_FEATURES"],
-        spine_timestamp_col="EVENT_DATE"
-    )
+    >>> customer_features = FeatureView(
+    ...     name="CUSTOMER_TRANSACTION_FEATURES",
+    ...     entities=[customer_entity],
+    ...     feature_df=feature_df,
+    ...     refresh_freq="1 day",
+    ...     description="Customer transaction summary features"
+    ... )
+    >>> fs.register_feature_view(customer_features)
+
+    >>> # Generate training data with point-in-time correctness
+    >>> spine_df = session.table("CUSTOMER_LABELS")
+    >>> training_data = fs.generate_dataset(
+    ...     spine_df=spine_df,
+    ...     feature_views=["CUSTOMER_TRANSACTION_FEATURES"],
+    ...     spine_timestamp_col="EVENT_DATE"
+    ... )
 """
 
 from snowflake_ml_template.feature_store.core import SQLEntity, SQLFeatureView
