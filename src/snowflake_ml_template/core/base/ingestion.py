@@ -15,7 +15,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from snowflake.snowpark import Session
 
 
 class IngestionMethod(Enum):
@@ -191,6 +194,7 @@ class BaseIngestionStrategy(ABC):
 
         self.config = config
         self.logger = self._get_logger()
+        self.session: Optional[Session] = None
 
     def _get_logger(self) -> Any:
         """Get logger instance.
@@ -262,3 +266,11 @@ class BaseIngestionStrategy(ABC):
             f"{self.config.target_schema}."
             f"{self.config.target_table}"
         )
+
+    def set_session(self, session: "Session") -> None:
+        """Set the Snowflake session for this strategy.
+
+        Args:
+            session: Active Snowflake session to use for operations
+        """
+        self.session = session

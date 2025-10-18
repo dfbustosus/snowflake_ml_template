@@ -1,7 +1,7 @@
 """SPCS deployment strategy for real-time inference."""
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from snowflake.snowpark import Session
 
@@ -43,14 +43,41 @@ class SPCSStrategy(BaseDeploymentStrategy):
         >>> result = strategy.deploy()
     """
 
-    def __init__(self, config: DeploymentConfig):
-        """Initialize the SPCS strategy."""
+    def __init__(self, config: DeploymentConfig) -> None:
+        """Initialize the SPCS deployment strategy.
+
+        Args:
+            config: Deployment configuration
+        """
         super().__init__(config)
-        self.session: Session = None
+        self._session: Optional[Session] = None
 
     def set_session(self, session: Session) -> None:
-        """Set the Snowflake session."""
-        self.session = session
+        """Set the Snowflake session.
+
+        Args:
+            session: Active Snowflake session to use for operations
+
+        Raises:
+            ValueError: If session is None
+        """
+        if session is None:
+            raise ValueError("Session cannot be None")
+        self._session = session
+
+    @property
+    def session(self) -> Session:
+        """Get the active Snowflake session.
+
+        Returns:
+            The active Snowflake session
+
+        Raises:
+            ValueError: If session is not set
+        """
+        if self._session is None:
+            raise ValueError("Session is not set. Call set_session() first.")
+        return self._session
 
     def deploy(self, **kwargs: Any) -> DeploymentResult:
         """Deploy model to SPCS."""
