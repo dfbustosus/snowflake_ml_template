@@ -1,95 +1,86 @@
 """Ingestion orchestrator for managing ingestion operations."""
 
-from typing import TYPE_CHECKING, Dict
+from typing import Any, Dict, Optional
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.base.ingestion import IngestionResult
-
-if TYPE_CHECKING:
-    from snowflake_ml_template.core.base.ingestion import BaseIngestionStrategy
-
+from snowflake_ml_template.core.base.ingestion import (
+    BaseIngestionStrategy,
+    ExecutionEventTracker,
+    IngestionResult,
+)
 from snowflake_ml_template.utils.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class IngestionOrchestrator:
-    """Orchestrate data ingestion operations.
+    """Manage registration and execution of ingestion strategies."""
 
-    This class manages ingestion strategies and executes ingestion operations
-    following the Strategy pattern.
-
-    Example:
-        >>> orchestrator = IngestionOrchestrator(session)
-        >>> orchestrator.register_strategy("copy_into", CopyIntoStrategy(config))
-        >>> result = orchestrator.execute("copy_into")
-    """
-
-    def __init__(self, session: Session) -> None:
-        """Initialize the IngestionOrchestrator with a Snowflake session.
-
-        Args:
-            session: Active Snowflake session for database operations
-        """
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize the orchestrator."""
         if session is None:
             raise ValueError("Session cannot be None")
         self.session = session
-        self.strategies: Dict[str, BaseIngestionStrategy] = {}
-        self.logger = get_logger(__name__)
+        self.tracker = tracker
+        self._logger = get_logger(__name__)
+        self._strategies: Dict[str, BaseIngestionStrategy] = {}
 
-    def register_strategy(self, name: str, strategy: "BaseIngestionStrategy") -> None:
-        """Register an ingestion strategy.
-
-        Args:
-            name: Name to register the strategy under
-            strategy: Strategy instance to register
-
-        Raises:
-            ValueError: If name or strategy is invalid
-        """
+    def register_strategy(self, name: str, strategy: BaseIngestionStrategy) -> None:
+        """Register an ingestion strategy."""
         if not name or not isinstance(name, str):
             raise ValueError("Strategy name must be a non-empty string")
-        if not hasattr(strategy, "set_session"):
-            raise ValueError("Strategy must have a set_session method")
-        if not hasattr(strategy, "ingest"):
-            raise ValueError("Strategy must have an ingest method")
+        if not isinstance(strategy, BaseIngestionStrategy):
+            raise TypeError("Strategy must inherit from BaseIngestionStrategy")
 
-        # Use setattr to bypass mypy's attribute check since we've verified it exists
-        getattr(strategy, "set_session")(self.session)
-        self.strategies[name] = strategy
-        self.logger.info("Registered ingestion strategy", extra={"strategy_name": name})
+        strategy.set_session(self.session)
+        strategy.set_tracker(self.tracker)
+        self._strategies[name] = strategy
+        self._logger.info(
+            "Registered ingestion strategy",
+            extra={"strategy_name": name, "method": strategy.config.method.value},
+        )
 
-    def execute(self, strategy_name: str) -> IngestionResult:
-        """Execute an ingestion strategy.
+    def unregister_strategy(self, name: str) -> None:
+        """Unregister an ingestion strategy."""
+        if name in self._strategies:
+            del self._strategies[name]
 
-        Args:
-            strategy_name: Name of the strategy to execute
+    def get_strategy(self, name: str) -> BaseIngestionStrategy:
+        """Get an ingestion strategy by name."""
+        try:
+            return self._strategies[name]
+        except KeyError as exc:
+            raise ValueError(f"Strategy not found: {name}") from exc
 
-        Returns:
-            IngestionResult containing the result of the operation
+    @property
+    def strategies(self) -> Dict[str, BaseIngestionStrategy]:
+        """Return a shallow copy of registered strategies."""
+        return dict(self._strategies)
 
-        Raises:
-            ValueError: If strategy is not found or validation fails
-        """
+    def execute(self, strategy_name: str, **kwargs: Any) -> IngestionResult:
+        """Execute an ingestion strategy."""
         if not strategy_name or not isinstance(strategy_name, str):
             raise ValueError("Strategy name must be a non-empty string")
 
-        if strategy_name not in self.strategies:
-            raise ValueError(f"Strategy not found: {strategy_name}")
-
-        strategy = self.strategies[strategy_name]
+        strategy = self.get_strategy(strategy_name)
 
         if not strategy.validate():
             raise ValueError(f"Strategy validation failed: {strategy_name}")
 
-        target = strategy.get_target_table_name()
-        if not strategy.config or not strategy.config.source:
+        config = strategy.config
+        if not config or not config.source:
             raise ValueError("Invalid strategy configuration: missing source")
 
-        result = strategy.ingest(strategy.config.source, target)
+        result = strategy.execute_ingestion(
+            source=config.source,
+            target=strategy.get_target_table_name(),
+            **kwargs,
+        )
 
-        self.logger.info(
+        self._logger.info(
             "Ingestion completed",
             extra={
                 "strategy_name": strategy_name,
@@ -97,5 +88,4 @@ class IngestionOrchestrator:
                 "rows_loaded": result.rows_loaded,
             },
         )
-
         return result
