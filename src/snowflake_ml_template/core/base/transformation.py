@@ -266,6 +266,22 @@ class BaseTransformation(ABC):
         """Handle transformation failure in hook."""
         pass
 
+    def pre_quality_checks(self) -> None:
+        """Perform governance checks before running the transformation."""
+        pass
+
+    def validate_output(self, result: TransformationResult) -> Dict[str, Any]:
+        """Return quality report for the transformed data."""
+        return {}
+
+    def post_quality_checks(self, quality_report: Dict[str, Any]) -> None:
+        """Handle governance reporting after transformation validation."""
+        pass
+
+    def on_quality_failure(self, error: Exception) -> None:
+        """React to transformation governance failures."""
+        pass
+
     def get_source_table_name(self) -> str:
         """Get fully qualified source table name.
 
@@ -292,6 +308,12 @@ class BaseTransformation(ABC):
 
     def execute_transformation(self, **kwargs: Any) -> TransformationResult:
         """Execute the transformation with lifecycle hooks and tracking."""
+        try:
+            self.pre_quality_checks()
+        except Exception as quality_error:
+            self.on_quality_failure(quality_error)
+            raise
+
         self._emit_event(
             event="transformation_start",
             payload={"timestamp": datetime.now(timezone.utc).isoformat()},
@@ -305,6 +327,12 @@ class BaseTransformation(ABC):
             result.metrics.setdefault("duration_seconds", duration)
             result.start_time = result.start_time or start_time
             result.end_time = result.end_time or datetime.now(timezone.utc)
+            try:
+                quality_report = self.validate_output(result)
+                self.post_quality_checks(quality_report)
+            except Exception as quality_error:
+                self.on_quality_failure(quality_error)
+                raise
             self.post_transform(result)
             self._emit_event(
                 event="transformation_end",

@@ -337,6 +337,22 @@ class BaseIngestionStrategy(ABC):
         """Handle ingestion failure in hook."""
         pass
 
+    def pre_validation(self, source: DataSource) -> None:
+        """Perform governance checks before validating the source."""
+        pass
+
+    def validate_source(self, source: DataSource) -> Dict[str, Any]:
+        """Return validation report for the source prior to ingestion."""
+        return {}
+
+    def post_validation(self, source: DataSource, report: Dict[str, Any]) -> None:
+        """Handle governance reporting after source validation."""
+        pass
+
+    def on_validation_error(self, source: DataSource, error: Exception) -> None:
+        """React to validation governance failures."""
+        pass
+
     def get_target_table_name(self) -> str:
         """Get fully qualified target table name.
 
@@ -361,6 +377,14 @@ class BaseIngestionStrategy(ABC):
         self, source: DataSource, target: str, **kwargs: Any
     ) -> IngestionResult:
         """Execute ingestion with lifecycle hooks and tracking."""
+        try:
+            self.pre_validation(source)
+            validation_report = self.validate_source(source)
+            self.post_validation(source, validation_report)
+        except Exception as validation_error:
+            self.on_validation_error(source, validation_error)
+            raise
+
         self._emit_event(
             event="ingestion_start",
             payload={

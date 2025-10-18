@@ -307,6 +307,26 @@ class BaseDeploymentStrategy(ABC):
         """Handle undeployment failure in hook."""
         pass
 
+    def pre_compliance_check(self, action: str, context: Dict[str, Any]) -> None:
+        """Perform governance checks before executing a deployment action."""
+        pass
+
+    def validate_compliance(
+        self, action: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Return compliance report for the requested deployment action."""
+        return {}
+
+    def post_compliance_check(
+        self, action: str, outcome: Dict[str, Any], report: Dict[str, Any]
+    ) -> None:
+        """Handle governance reporting after a deployment action completes."""
+        pass
+
+    def on_compliance_failure(self, action: str, error: Exception) -> None:
+        """React to deployment governance failures."""
+        pass
+
     @abstractmethod
     def validate(self) -> bool:
         """Validate deployment configuration.
@@ -367,6 +387,16 @@ class BaseDeploymentStrategy(ABC):
 
     def execute_deploy(self, **kwargs: Any) -> DeploymentResult:
         """Execute deployment with lifecycle hooks and tracking."""
+        compliance_context = {"parameters": kwargs}
+        try:
+            self.pre_compliance_check(action="deploy", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="deploy", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="deploy", error=compliance_error)
+            raise
+
         self._emit_event(
             event="deployment_start",
             payload={"timestamp": datetime.now(timezone.utc).isoformat()},
@@ -380,6 +410,15 @@ class BaseDeploymentStrategy(ABC):
             result.metrics.setdefault("duration_seconds", duration)
             result.start_time = result.start_time or start_time
             result.end_time = result.end_time or datetime.now(timezone.utc)
+            try:
+                self.post_compliance_check(
+                    action="deploy",
+                    outcome={"status": result.status, "metrics": result.metrics},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(action="deploy", error=compliance_error)
+                raise
             self.post_deploy(result)
             self._emit_event(
                 event="deployment_end",
@@ -404,6 +443,16 @@ class BaseDeploymentStrategy(ABC):
 
     def execute_undeploy(self) -> bool:
         """Execute undeployment with hooks and tracking."""
+        compliance_context: Dict[str, Any] = {}
+        try:
+            self.pre_compliance_check(action="undeploy", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="undeploy", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="undeploy", error=compliance_error)
+            raise
+
         self._emit_event(
             event="undeploy_start",
             payload={"timestamp": datetime.now(timezone.utc).isoformat()},
@@ -412,6 +461,15 @@ class BaseDeploymentStrategy(ABC):
 
         try:
             success = self.undeploy()
+            try:
+                self.post_compliance_check(
+                    action="undeploy",
+                    outcome={"success": success},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(action="undeploy", error=compliance_error)
+                raise
             self.post_undeploy(success)
             self._emit_event(
                 event="undeploy_end",
@@ -435,13 +493,35 @@ class BaseDeploymentStrategy(ABC):
 
     def execute_health_check(self) -> Dict[str, Any]:
         """Execute health check with hooks and tracking."""
+        compliance_context: Dict[str, Any] = {}
+        try:
+            self.pre_compliance_check(action="health_check", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="health_check", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="health_check", error=compliance_error)
+            raise
+
         self._emit_event(
             event="health_check_start",
             payload={"timestamp": datetime.now(timezone.utc).isoformat()},
         )
         self.pre_health_check()
+
         try:
             status = self.health_check()
+            try:
+                self.post_compliance_check(
+                    action="health_check",
+                    outcome={"status": status},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(
+                    action="health_check", error=compliance_error
+                )
+                raise
             self.post_health_check(status)
             self._emit_event(
                 event="health_check_end",

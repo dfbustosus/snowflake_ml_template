@@ -283,6 +283,30 @@ class BasePipeline(ABC):
         """Handle stage failure inside the hook."""
         pass
 
+    def pre_validation_checks(self) -> None:
+        """Perform governance checks before configuration validation."""
+        pass
+
+    def post_validation_checks(self, report: Dict[str, Any]) -> None:
+        """Handle governance reporting after configuration validation."""
+        pass
+
+    def on_validation_failure(self, error: Exception) -> None:
+        """React to validation governance failures."""
+        pass
+
+    def pre_monitoring_checks(self) -> None:
+        """Perform governance checks before monitoring setup."""
+        pass
+
+    def post_monitoring_checks(self, status: Dict[str, Any]) -> None:
+        """Handle governance reporting after monitoring setup."""
+        pass
+
+    def on_monitoring_failure(self, error: Exception) -> None:
+        """React to monitoring governance failures."""
+        pass
+
     def execute(self) -> PipelineResult:
         """Run the entire ML pipeline.
 
@@ -310,7 +334,16 @@ class BasePipeline(ABC):
 
         try:
             # Stage 1: Validation
-            self._execute_stage(PipelineStage.VALIDATION, self.validate_config)
+            try:
+                self.pre_validation_checks()
+                self._execute_stage(PipelineStage.VALIDATION, self.validate_config)
+                validation_metrics = self._stage_metrics.get(
+                    PipelineStage.VALIDATION.value, {}
+                )
+                self.post_validation_checks({"metrics": validation_metrics})
+            except Exception as validation_error:
+                self.on_validation_failure(validation_error)
+                raise
 
             # Stage 2: Infrastructure Setup
             self._execute_stage(
@@ -338,7 +371,16 @@ class BasePipeline(ABC):
             self._execute_stage(PipelineStage.DEPLOYMENT, self.deploy_model)
 
             # Stage 9: Monitoring Setup
-            self._execute_stage(PipelineStage.MONITORING, self.setup_monitoring)
+            try:
+                self.pre_monitoring_checks()
+                self._execute_stage(PipelineStage.MONITORING, self.setup_monitoring)
+                monitoring_metrics = self._stage_metrics.get(
+                    PipelineStage.MONITORING.value, {}
+                )
+                self.post_monitoring_checks({"metrics": monitoring_metrics})
+            except Exception as monitoring_error:
+                self.on_monitoring_failure(monitoring_error)
+                raise
 
             # Success
             end_time = datetime.now(timezone.utc)

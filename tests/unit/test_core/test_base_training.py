@@ -106,6 +106,11 @@ class DummyTrainer(BaseTrainer):
         self.pre_called = False
         self.post_called = False
         self.error_called = False
+        self.data_validation_pre_called = False
+        self.data_validation_report: dict | None = None
+        self.data_validation_failure_called = False
+        self.model_governance_called = False
+        self.raise_data_validation_error = False
 
     def train(self, data, **kwargs):  # pragma: no cover
         """Return a successful training result."""
@@ -128,6 +133,28 @@ class DummyTrainer(BaseTrainer):
         """Raise NotImplementedError."""
         raise NotImplementedError
 
+    def pre_data_validation(self, data, **kwargs):
+        """Pre-data validation hook."""
+        self.data_validation_pre_called = True
+
+    def validate_training_data(self, data, **kwargs):
+        """Validate training data hook."""
+        if self.raise_data_validation_error:
+            raise RuntimeError("data validation failed")
+        return {"validated": True}
+
+    def post_data_validation(self, report):
+        """Post-data validation hook."""
+        self.data_validation_report = report
+
+    def on_data_validation_error(self, error: Exception) -> None:
+        """Error hook."""
+        self.data_validation_failure_called = True
+
+    def post_model_governance(self, result: TrainingResult, report: dict) -> None:
+        """Post-model governance hook."""
+        self.model_governance_called = True
+
 
 def test_base_trainer_helpers():
     """Test base trainer helpers."""
@@ -149,3 +176,28 @@ def test_base_trainer_helpers():
     assert result.training_status == TrainingStatus.SUCCESS
     assert "duration_seconds" in result.metrics
     assert tracker.events[-1][1] == "training_end"
+    assert trainer.data_validation_pre_called is True
+    assert trainer.data_validation_report == {"validated": True}
+    assert trainer.model_governance_called is True
+    assert trainer.data_validation_failure_called is False
+
+
+def test_training_data_validation_failure():
+    """Ensure training data governance failure hook executes on error."""
+    model_cfg = BaseModelConfig(framework=MLFramework.SKLEARN, model_type="clf")
+    cfg = TrainingConfig(
+        strategy=TrainingStrategy.SINGLE_NODE,
+        model_config=model_cfg,
+        training_database="DB",
+        training_schema="SC",
+        training_table="T",
+        warehouse="WH",
+    )
+    trainer = DummyTrainer(cfg)
+    trainer.raise_data_validation_error = True
+
+    with pytest.raises(RuntimeError, match="data validation failed"):
+        trainer.execute_training(data="dummy")
+
+    assert trainer.data_validation_pre_called is True
+    assert trainer.data_validation_failure_called is True

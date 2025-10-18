@@ -327,6 +327,28 @@ class BaseTrainer(ABC):
         """Handle training failure in hook."""
         pass
 
+    def pre_data_validation(self, data: Any, **kwargs: Any) -> None:
+        """Perform governance checks before training commences."""
+        pass
+
+    def validate_training_data(self, data: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Return validation report for training data."""
+        return {}
+
+    def post_data_validation(self, report: Dict[str, Any]) -> None:
+        """Handle governance reporting after data validation."""
+        pass
+
+    def on_data_validation_error(self, error: Exception) -> None:
+        """React to training data governance failures."""
+        pass
+
+    def post_model_governance(
+        self, result: TrainingResult, report: Dict[str, Any]
+    ) -> None:
+        """Handle governance activities after training completes."""
+        pass
+
     @abstractmethod
     def save_model(self, model: Any, path: str) -> str:
         """Save trained model to specified path.
@@ -376,6 +398,14 @@ class BaseTrainer(ABC):
 
     def execute_training(self, data: Any, **kwargs: Any) -> TrainingResult:
         """Execute training with lifecycle hooks and tracking."""
+        try:
+            self.pre_data_validation(data, **kwargs)
+            validation_report = self.validate_training_data(data, **kwargs)
+            self.post_data_validation(validation_report)
+        except Exception as validation_error:
+            self.on_data_validation_error(validation_error)
+            raise
+
         self._emit_event(
             event="training_start",
             payload={
@@ -392,6 +422,7 @@ class BaseTrainer(ABC):
             result.metrics.setdefault("duration_seconds", duration)
             result.start_time = result.start_time or start_time
             result.end_time = result.end_time or datetime.now(timezone.utc)
+            self.post_model_governance(result, validation_report)
             self.post_train(result)
             self._emit_event(
                 event="training_end",

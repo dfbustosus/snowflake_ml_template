@@ -123,6 +123,10 @@ class DummyStrategy(BaseIngestionStrategy):
         self.pre_called = False
         self.post_called = False
         self.error_called = False
+        self.validation_pre_called = False
+        self.validation_post_report: dict | None = None
+        self.validation_failure_called = False
+        self.raise_validation_error = False
 
     def ingest(self, source, target, **kwargs):  # pragma: no cover
         """Return a successful ingestion result for testing."""
@@ -150,6 +154,24 @@ class DummyStrategy(BaseIngestionStrategy):
         """Error hook."""
         self.error_called = True
 
+    def pre_validation(self, source: DataSource) -> None:
+        """Pre-validation hook."""
+        self.validation_pre_called = True
+
+    def validate_source(self, source: DataSource) -> dict:
+        """Validate source hook."""
+        if self.raise_validation_error:
+            raise RuntimeError("validation failed")
+        return {"validated": True}
+
+    def post_validation(self, source: DataSource, report: dict) -> None:
+        """Post-validation hook."""
+        self.validation_post_report = report
+
+    def on_validation_error(self, source: DataSource, error: Exception) -> None:
+        """Error hook."""
+        self.validation_failure_called = True
+
 
 def test_base_ingestion_strategy_helpers():
     """Test base ingestion strategy helpers."""
@@ -173,3 +195,27 @@ def test_base_ingestion_strategy_helpers():
     assert strat.pre_called is True
     assert strat.post_called is True
     assert tracker.events[-1][1] == "ingestion_end"
+    assert strat.validation_pre_called is True
+    assert strat.validation_post_report == {"validated": True}
+    assert strat.validation_failure_called is False
+
+
+def test_ingestion_validation_failure(monkeypatch):
+    """Ensure validation failure hook executes and exception propagates."""
+    ds = DataSource(source_type=SourceType.S3, location="s3://b", file_format="CSV")
+    cfg = IngestionConfig(
+        method=IngestionMethod.SNOWPIPE,
+        source=ds,
+        target_database="DB",
+        target_schema="SC",
+        target_table="T",
+        warehouse="WH",
+    )
+    strat = DummyStrategy(cfg)
+    strat.raise_validation_error = True
+
+    with pytest.raises(RuntimeError, match="validation failed"):
+        strat.execute_ingestion(ds, strat.get_target_table_name())
+
+    assert strat.validation_pre_called is True
+    assert strat.validation_failure_called is True

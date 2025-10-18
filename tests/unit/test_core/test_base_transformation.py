@@ -110,6 +110,10 @@ class DummyTransformation(BaseTransformation):
         self.pre_called = False
         self.post_called = False
         self.error_called = False
+        self.quality_pre_called = False
+        self.quality_post_report: dict | None = None
+        self.quality_failure_called = False
+        self.raise_quality_error = False
 
     def transform(self, **kwargs):  # pragma: no cover
         """Return successful transformation result."""
@@ -137,6 +141,24 @@ class DummyTransformation(BaseTransformation):
         """Set error_called to True."""
         self.error_called = True
 
+    def pre_quality_checks(self) -> None:
+        """Pre-quality checks hook."""
+        self.quality_pre_called = True
+
+    def validate_output(self, result: TransformationResult) -> dict:
+        """Validate output hook."""
+        if self.raise_quality_error:
+            raise RuntimeError("quality failure")
+        return {"quality": "ok"}
+
+    def post_quality_checks(self, quality_report: dict) -> None:
+        """Post-quality checks hook."""
+        self.quality_post_report = quality_report
+
+    def on_quality_failure(self, error: Exception) -> None:
+        """Error hook."""
+        self.quality_failure_called = True
+
 
 def test_base_transformation_helpers():
     """Test base transformation helpers."""
@@ -162,3 +184,28 @@ def test_base_transformation_helpers():
     assert t.pre_called is True
     assert t.post_called is True
     assert tracker.events[-1][1] == "transformation_end"
+    assert t.quality_pre_called is True
+    assert t.quality_post_report == {"quality": "ok"}
+    assert t.quality_failure_called is False
+
+
+def test_transformation_quality_failure():
+    """Ensure quality failure hook executes and exception propagates."""
+    cfg = TransformationConfig(
+        transformation_type=TransformationType.SQL,
+        source_database="SDB",
+        source_schema="SSC",
+        source_table="ST",
+        target_database="TDB",
+        target_schema="TSC",
+        target_table="TT",
+        warehouse="WH",
+    )
+    t = DummyTransformation(cfg)
+    t.raise_quality_error = True
+
+    with pytest.raises(RuntimeError, match="quality failure"):
+        t.execute_transformation()
+
+    assert t.quality_pre_called is True
+    assert t.quality_failure_called is True
