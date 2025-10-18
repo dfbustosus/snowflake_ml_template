@@ -9,9 +9,11 @@ Classes:
 """
 
 import threading
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Mapping, Optional, cast
 
 from snowflake.snowpark import Session
+
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
 class SessionManager:
@@ -56,6 +58,13 @@ class SessionManager:
 
     _instance: Optional["SessionManager"] = None
     _lock: threading.Lock = threading.Lock()
+    _SENSITIVE_CONFIG_KEYS = {
+        "password",
+        "private_key",
+        "private_key_passphrase",
+        "token",
+        "oauth_token",
+    }
 
     def __new__(cls) -> "SessionManager":
         """Create or return the singleton instance.
@@ -81,29 +90,12 @@ class SessionManager:
         self._sessions: Dict[str, Session] = {}
         self._current_session: Optional[Session] = None
         self._current_config: Optional[Dict[str, Any]] = None
-        self._logger = self._get_logger()
+        self._current_config_key: Optional[str] = None
+        self._state_lock: threading.RLock = threading.RLock()
+        self._logger = self._create_logger()
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
-
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
-
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _create_logger(self) -> StructuredLogger:
+        return get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 
     @classmethod
     def create_session(cls, config: Dict[str, Any]) -> Session:
@@ -136,54 +128,54 @@ class SessionManager:
             >>> session = SessionManager.create_session(config)
         """
         instance = cls()
+        config_copy = dict(config)
 
-        # Validate required parameters
-        if not config.get("account"):
+        if not config_copy.get("account"):
             raise ValueError("Snowflake account is required")
-        if not config.get("user"):
+        if not config_copy.get("user"):
             raise ValueError("Snowflake user is required")
 
-        # Create a hash key for this configuration
-        config_key = cls._get_config_hash(config)
+        config_key = cls._get_config_hash(config_copy)
 
-        # Check if session already exists
-        if config_key in instance._sessions:
-            instance._logger.info(
-                f"Reusing existing session for account: {config.get('account')}"
-            )
-            instance._current_session = instance._sessions[config_key]
-            instance._current_config = config
-            return instance._current_session
+        should_apply_context = False
 
-        # Create new session
-        try:
-            instance._logger.info(
-                f"Creating new Snowflake session for account: {config.get('account')}"
-            )
+        with instance._state_lock:
+            if config_key in instance._sessions:
+                instance._logger.info(
+                    f"Reusing existing session for account: {config_copy.get('account')}"
+                )
+                session = instance._sessions[config_key]
+                instance._current_session = session
+                instance._current_config = cls._sanitize_config(config_copy)
+                instance._current_config_key = config_key
+                should_apply_context = True
+            else:
+                try:
+                    instance._logger.info(
+                        f"Creating new Snowflake session for account: {config_copy.get('account')}"
+                    )
+                    session = Session.builder.configs(config_copy).create()
+                except Exception as e:
+                    instance._logger.error(
+                        f"Failed to create Snowflake session: {str(e)}", exc_info=True
+                    )
+                    raise
 
-            # Build session using Snowpark Session.builder
-            builder = Session.builder.configs(config)
-            session = builder.create()
+                instance._sessions[config_key] = session
+                instance._current_session = session
+                instance._current_config = cls._sanitize_config(config_copy)
+                instance._current_config_key = config_key
 
-            # Store session
-            instance._sessions[config_key] = session
-            instance._current_session = session
-            instance._current_config = config
+                instance._logger.info(
+                    f"Successfully created session. "
+                    f"Warehouse: {config_copy.get('warehouse', 'N/A')}, "
+                    f"Database: {config_copy.get('database', 'N/A')}, "
+                    f"Schema: {config_copy.get('schema', 'N/A')}"
+                )
 
-            instance._logger.info(
-                f"Successfully created session. "
-                f"Warehouse: {config.get('warehouse', 'N/A')}, "
-                f"Database: {config.get('database', 'N/A')}, "
-                f"Schema: {config.get('schema', 'N/A')}"
-            )
-
-            return cast(Session, session)
-
-        except Exception as e:
-            instance._logger.error(
-                f"Failed to create Snowflake session: {str(e)}", exc_info=True
-            )
-            raise
+        if should_apply_context:
+            cls._apply_context_if_needed(instance._current_session, config_copy)
+        return cast(Session, instance._current_session)
 
     @classmethod
     def get_session(cls) -> Session:
@@ -200,10 +192,10 @@ class SessionManager:
         """
         instance = cls()
 
-        if instance._current_session is None:
-            raise RuntimeError("No active session. Call create_session() first.")
-
-        return instance._current_session
+        with instance._state_lock:
+            if instance._current_session is None:
+                raise RuntimeError("No active session. Call create_session() first.")
+            return instance._current_session
 
     @classmethod
     def switch_warehouse(cls, warehouse: str) -> None:
@@ -225,28 +217,27 @@ class SessionManager:
         """
         instance = cls()
 
-        if instance._current_session is None:
-            raise RuntimeError("No active session. Call create_session() first.")
-
         if not warehouse:
             raise ValueError("Warehouse name cannot be empty")
 
-        instance._logger.info(f"Switching to warehouse: {warehouse}")
+        with instance._state_lock:
+            if instance._current_session is None:
+                raise RuntimeError("No active session. Call create_session() first.")
 
-        try:
-            instance._current_session.use_warehouse(warehouse)
+            instance._logger.info(f"Switching to warehouse: {warehouse}")
 
-            # Update current config
-            if instance._current_config:
-                instance._current_config["warehouse"] = warehouse
-
-            instance._logger.info(f"Successfully switched to warehouse: {warehouse}")
-
-        except Exception as e:
-            instance._logger.error(
-                f"Failed to switch warehouse: {str(e)}", exc_info=True
-            )
-            raise
+            try:
+                instance._current_session.use_warehouse(warehouse)
+                if instance._current_config is not None:
+                    instance._current_config["warehouse"] = warehouse
+                instance._logger.info(
+                    f"Successfully switched to warehouse: {warehouse}"
+                )
+            except Exception as e:
+                instance._logger.error(
+                    f"Failed to switch warehouse: {str(e)}", exc_info=True
+                )
+                raise
 
     @classmethod
     def switch_database(cls, database: str, schema: Optional[str] = None) -> None:
@@ -269,39 +260,37 @@ class SessionManager:
         """
         instance = cls()
 
-        if instance._current_session is None:
-            raise RuntimeError("No active session. Call create_session() first.")
-
         if not database:
             raise ValueError("Database name cannot be empty")
 
-        instance._logger.info(
-            f"Switching to database: {database}"
-            + (f", schema: {schema}" if schema else "")
-        )
-
-        try:
-            instance._current_session.use_database(database)
-
-            if schema:
-                instance._current_session.use_schema(schema)
-
-            # Update current config
-            if instance._current_config:
-                instance._current_config["database"] = database
-                if schema:
-                    instance._current_config["schema"] = schema
+        with instance._state_lock:
+            if instance._current_session is None:
+                raise RuntimeError("No active session. Call create_session() first.")
 
             instance._logger.info(
-                f"Successfully switched to database: {database}"
+                f"Switching to database: {database}"
                 + (f", schema: {schema}" if schema else "")
             )
 
-        except Exception as e:
-            instance._logger.error(
-                f"Failed to switch database/schema: {str(e)}", exc_info=True
-            )
-            raise
+            try:
+                instance._current_session.use_database(database)
+                if schema:
+                    instance._current_session.use_schema(schema)
+
+                if instance._current_config is not None:
+                    instance._current_config["database"] = database
+                    if schema:
+                        instance._current_config["schema"] = schema
+
+                instance._logger.info(
+                    f"Successfully switched to database: {database}"
+                    + (f", schema: {schema}" if schema else "")
+                )
+            except Exception as e:
+                instance._logger.error(
+                    f"Failed to switch database/schema: {str(e)}", exc_info=True
+                )
+                raise
 
     @classmethod
     def close_session(cls) -> None:
@@ -315,29 +304,28 @@ class SessionManager:
             >>> SessionManager.close_session()
         """
         instance = cls()
+        with instance._state_lock:
+            if instance._current_session is None:
+                instance._logger.warning("No active session to close")
+                return
 
-        if instance._current_session is None:
-            instance._logger.warning("No active session to close")
-            return
+            session = instance._current_session
+            config_key = instance._current_config_key
+            instance._logger.info("Closing current session")
 
         try:
-            instance._logger.info("Closing current session")
-            instance._current_session.close()
-
-            # Remove from sessions dict
-            if instance._current_config:
-                config_key = cls._get_config_hash(instance._current_config)
-                if config_key in instance._sessions:
-                    del instance._sessions[config_key]
-
-            instance._current_session = None
-            instance._current_config = None
-
-            instance._logger.info("Session closed successfully")
-
+            session.close()
         except Exception as e:
             instance._logger.error(f"Error closing session: {str(e)}", exc_info=True)
             raise
+
+        with instance._state_lock:
+            if config_key and config_key in instance._sessions:
+                del instance._sessions[config_key]
+            instance._current_session = None
+            instance._current_config = None
+            instance._current_config_key = None
+            instance._logger.info("Session closed successfully")
 
     @classmethod
     def close_all_sessions(cls) -> None:
@@ -351,24 +339,26 @@ class SessionManager:
         """
         instance = cls()
 
-        instance._logger.info(
-            f"Closing all sessions ({len(instance._sessions)} active)"
-        )
+        with instance._state_lock:
+            sessions = list(instance._sessions.items())
+            active_count = len(sessions)
+            instance._sessions.clear()
+            instance._current_session = None
+            instance._current_config = None
+            instance._current_config_key = None
 
-        for config_key, session in list(instance._sessions.items()):
+        instance._logger.info(f"Closing all sessions ({active_count} active)")
+
+        for config_key, session in sessions:
             try:
                 session.close()
-                del instance._sessions[config_key]
             except Exception as e:
                 instance._logger.error(f"Error closing session {config_key}: {str(e)}")
 
-        instance._current_session = None
-        instance._current_config = None
-
         instance._logger.info("All sessions closed")
 
-    @staticmethod
-    def _get_config_hash(config: Dict[str, Any]) -> str:
+    @classmethod
+    def _get_config_hash(cls, config: Dict[str, Any]) -> str:
         """Generate a hash key for a configuration.
 
         This method creates a unique hash key based on the connection
@@ -381,12 +371,74 @@ class SessionManager:
             Hash key string
         """
         # Use account, user, and role to create a unique key
-        key_parts = [
-            config.get("account", ""),
-            config.get("user", ""),
-            config.get("role", ""),
-        ]
-        return "|".join(key_parts)
+        hashed_items = []
+        for key in sorted(config.keys()):
+            if key.lower() in cls._SENSITIVE_CONFIG_KEYS:
+                continue
+            value = config[key]
+            hashed_items.append(f"{key}={cls._hashable_representation(value)}")
+        return "|".join(hashed_items)
+
+    @classmethod
+    def _sanitize_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized: Dict[str, Any] = {}
+        for key, value in config.items():
+            if key.lower() in cls._SENSITIVE_CONFIG_KEYS:
+                continue
+            sanitized[key] = value
+        return sanitized
+
+    @classmethod
+    def _hashable_representation(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return tuple(
+                (k, cls._hashable_representation(v)) for k, v in sorted(value.items())
+            )
+        if isinstance(value, list):
+            return tuple(cls._hashable_representation(v) for v in value)
+        if isinstance(value, tuple):
+            return tuple(cls._hashable_representation(v) for v in value)
+        if isinstance(value, set):
+            return tuple(
+                cls._hashable_representation(v)
+                for v in sorted(value, key=lambda item: repr(item))
+            )
+        return value
+
+    @staticmethod
+    def _needs_update(current: Optional[str], desired: Optional[str]) -> bool:
+        if desired is None:
+            return False
+        if current is None:
+            return True
+        return current.upper() != desired.upper()
+
+    @classmethod
+    def _apply_context_if_needed(
+        cls, session: Optional[Session], config: Dict[str, Any]
+    ) -> None:
+        if session is None:
+            return
+        role = config.get("role")
+        if isinstance(role, str) and cls._needs_update(
+            session.get_current_role(), role
+        ):
+            session.use_role(role)
+        warehouse = config.get("warehouse")
+        if isinstance(warehouse, str) and cls._needs_update(
+            session.get_current_warehouse(), warehouse
+        ):
+            session.use_warehouse(warehouse)
+        database = config.get("database")
+        if isinstance(database, str) and cls._needs_update(
+            session.get_current_database(), database
+        ):
+            session.use_database(database)
+        schema = config.get("schema")
+        if isinstance(schema, str) and cls._needs_update(
+            session.get_current_schema(), schema
+        ):
+            session.use_schema(schema)
 
     @classmethod
     def get_current_warehouse(cls) -> Optional[str]:
@@ -395,10 +447,11 @@ class SessionManager:
         Returns:
             Current warehouse name or None if no session exists
         """
-        instance = cls()
-        if instance._current_config:
-            return instance._current_config.get("warehouse")
-        return None
+        try:
+            session = cls.get_session()
+        except RuntimeError:
+            return None
+        return cast(Optional[str], session.get_current_warehouse())
 
     @classmethod
     def get_current_database(cls) -> Optional[str]:
@@ -407,10 +460,11 @@ class SessionManager:
         Returns:
             Current database name or None if no session exists
         """
-        instance = cls()
-        if instance._current_config:
-            return instance._current_config.get("database")
-        return None
+        try:
+            session = cls.get_session()
+        except RuntimeError:
+            return None
+        return cast(Optional[str], session.get_current_database())
 
     @classmethod
     def get_current_schema(cls) -> Optional[str]:
@@ -419,7 +473,32 @@ class SessionManager:
         Returns:
             Current schema name or None if no session exists
         """
+        try:
+            session = cls.get_session()
+        except RuntimeError:
+            return None
+        return cast(Optional[str], session.get_current_schema())
+
+    @classmethod
+    def switch_schema(cls, schema: str) -> None:
+        """Switch the active schema for the current session."""
         instance = cls()
-        if instance._current_config:
-            return instance._current_config.get("schema")
-        return None
+
+        if not schema:
+            raise ValueError("Schema name cannot be empty")
+
+        with instance._state_lock:
+            if instance._current_session is None:
+                raise RuntimeError("No active session. Call create_session() first.")
+            instance._logger.info(f"Switching to schema: {schema}")
+
+            try:
+                instance._current_session.use_schema(schema)
+                if instance._current_config is not None:
+                    instance._current_config["schema"] = schema
+                instance._logger.info(f"Successfully switched to schema: {schema}")
+            except Exception as e:
+                instance._logger.error(
+                    f"Failed to switch schema: {str(e)}", exc_info=True
+                )
+                raise
