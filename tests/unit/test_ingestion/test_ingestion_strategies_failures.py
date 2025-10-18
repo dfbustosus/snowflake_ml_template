@@ -55,7 +55,10 @@ def test_copy_into_ingest_failure_returns_failed_result():
         [("COPY INTO", lambda: (_ for _ in ()).throw(RuntimeError("boom")))]
     )
     strategy.set_session(sess)
-    result = strategy.ingest(config.source, "RAW_DATA.PUBLIC.TABLE1")
+    result = strategy.execute_ingestion(
+        config.source,
+        "RAW_DATA.PUBLIC.TABLE1",
+    )
     assert result.status == "failed"
     assert "boom" in (result.error or "")
 
@@ -82,7 +85,10 @@ def test_snowpipe_ingest_failure_returns_failed_result():
         ]
     )
     strategy.set_session(sess)
-    result = strategy.ingest(config.source, "RAW_DATA.PUBLIC.TABLE2")
+    result = strategy.execute_ingestion(
+        config.source,
+        "RAW_DATA.PUBLIC.TABLE2",
+    )
     assert result.status == "failed"
     assert "fail" in (result.error or "")
 
