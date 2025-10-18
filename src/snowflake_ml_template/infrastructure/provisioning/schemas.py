@@ -7,15 +7,15 @@ Classes:
     SchemaProvisioner: Create and manage schemas
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.exceptions import ConfigurationError
-from snowflake_ml_template.utils.logging import get_logger
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
+from snowflake_ml_template.infrastructure.provisioning.base import BaseProvisioner
 
 
-class SchemaProvisioner:
+class SchemaProvisioner(BaseProvisioner):
     """Provision and manage Snowflake schemas.
 
     This class handles the creation and management of Snowflake schemas
@@ -47,20 +47,13 @@ class SchemaProvisioner:
     # Canonical schema names
     CANONICAL_SCHEMAS = ["RAW_DATA", "FEATURES", "MODELS", "PIPELINES", "ANALYTICS"]
 
-    def __init__(self, session: Session) -> None:
-        """Initialize the schema provisioner.
-
-        Args:
-            session: Active Snowflake session
-
-        Raises:
-            ValueError: If session is None
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-
-        self.session = session
-        self.logger = get_logger(__name__)
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize `SchemaProvisioner` with a Snowflake session."""
+        super().__init__(session=session, tracker=tracker)
 
     def create_canonical_schemas(
         self, database: str, schemas: Optional[List[str]] = None
@@ -114,6 +107,14 @@ class SchemaProvisioner:
         comment: Optional[str] = None,
         transient: bool = False,
         managed_access: bool = False,
+        *,
+        data_retention_time_in_days: Optional[int] = None,
+        default_ddl_collation: Optional[str] = None,
+        default_sequence_order: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
+        grant_future_privileges_to: Optional[Iterable[str]] = None,
+        directory: Optional[bool] = None,
+        encryption: Optional[str] = None,
     ) -> bool:
         """Create a schema if it doesn't exist.
 
@@ -126,6 +127,8 @@ class SchemaProvisioner:
             comment: Optional comment describing the schema
             transient: Whether to create a transient schema
             managed_access: Whether to use managed access
+            directory: Whether to enable directory
+            encryption: Type of encryption to use
 
         Returns:
             True if schema was created or already exists
@@ -145,44 +148,57 @@ class SchemaProvisioner:
             raise ValueError("Database and schema names cannot be empty")
 
         full_name = f"{database}.{schema}"
-        self.logger.info(f"Creating schema: {full_name}")
+        qualified_name = self.format_qualified_identifier(database, schema)
+        self.logger.info("Creating schema", extra={"schema": full_name})
 
-        try:
-            # Build CREATE SCHEMA statement
-            sql_parts = ["CREATE"]
+        clauses = ["CREATE"]
 
-            if transient:
-                sql_parts.append("TRANSIENT")
+        if transient:
+            clauses.append("TRANSIENT")
 
-            sql_parts.append(f"SCHEMA IF NOT EXISTS {full_name}")
+        clauses.append(f"SCHEMA IF NOT EXISTS {qualified_name}")
 
-            if managed_access:
-                sql_parts.append("WITH MANAGED ACCESS")
+        options: Dict[str, Any] = {}
+        if managed_access:
+            clauses.append("WITH MANAGED ACCESS")
+        if data_retention_time_in_days is not None:
+            options["DATA_RETENTION_TIME_IN_DAYS"] = data_retention_time_in_days
+        if default_ddl_collation:
+            options["DEFAULT_DDL_COLLATION"] = default_ddl_collation
+        if default_sequence_order:
+            options["DEFAULT_SEQUENCE_ORDER"] = default_sequence_order
 
-            if comment:
-                sql_parts.append(f"COMMENT = '{comment}'")
+        set_clause = self._format_set_options(options)
+        if set_clause:
+            clauses.append(set_clause)
 
-            sql = " ".join(sql_parts)
+        if directory is not None:
+            enable_literal = str(directory).upper()
+            clauses.append(f"DIRECTORY = ( ENABLE = {enable_literal} )")
 
-            # Execute
-            self.session.sql(sql).collect()
+        if encryption:
+            clauses.append(f"ENCRYPTION = ( TYPE = {self.quote_literal(encryption)} )")
 
-            self.logger.info(
-                f"Schema created successfully: {full_name}",
-                extra={"transient": transient, "managed_access": managed_access},
-            )
+        if comment:
+            clauses.append(f"COMMENT = {self.quote_literal(comment)}")
 
-            return True
+        sql = " ".join(clauses)
 
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create schema: {full_name}", extra={"error": str(e)}
-            )
-            raise ConfigurationError(
-                f"Failed to create schema: {full_name}",
-                context={"database": database, "schema": schema},
-                original_error=e,
-            )
+        self._execute_sql(
+            sql,
+            context={"database": database, "schema": schema},
+            emit_event="schema_created",
+        )
+
+        if tags:
+            self._apply_tags("SCHEMA", qualified_name, tags)
+
+        if grant_future_privileges_to:
+            database_identifier = self.quote_identifier(database)
+            for role in grant_future_privileges_to:
+                self._grant_future_privileges_to_role(role, database_identifier)
+
+        return True
 
     def drop_schema(
         self, database: str, schema: str, if_exists: bool = True, cascade: bool = False
@@ -205,27 +221,20 @@ class SchemaProvisioner:
             raise ValueError("Database and schema names cannot be empty")
 
         full_name = f"{database}.{schema}"
-        self.logger.warning(f"Dropping schema: {full_name}")
+        qualified_name = self.format_qualified_identifier(database, schema)
+        self.logger.warning("Dropping schema", extra={"schema": full_name})
 
-        try:
-            sql = f"DROP SCHEMA {'IF EXISTS' if if_exists else ''} {full_name}"
-            if cascade:
-                sql += " CASCADE"
+        clause = "IF EXISTS " if if_exists else ""
+        sql = f"DROP SCHEMA {clause}{qualified_name}".strip()
+        if cascade:
+            sql += " CASCADE"
 
-            self.session.sql(sql).collect()
-
-            self.logger.info(f"Schema dropped: {full_name}")
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to drop schema: {full_name}", extra={"error": str(e)}
-            )
-            raise ConfigurationError(
-                f"Failed to drop schema: {full_name}",
-                context={"database": database, "schema": schema},
-                original_error=e,
-            )
+        self._execute_sql(
+            sql,
+            context={"database": database, "schema": schema},
+            emit_event="schema_dropped",
+        )
+        return True
 
     def schema_exists(self, database: str, schema: str) -> bool:
         """Check if a schema exists.
@@ -239,7 +248,7 @@ class SchemaProvisioner:
         """
         try:
             result = self.session.sql(
-                f"SHOW SCHEMAS LIKE '{schema}' IN DATABASE {database}"
+                f"SHOW SCHEMAS LIKE {self.quote_literal(schema)} IN DATABASE {self.quote_identifier(database)}"
             ).collect()
             return len(result) > 0
         except Exception:
@@ -255,11 +264,23 @@ class SchemaProvisioner:
             List of schema names
         """
         try:
-            result = self.session.sql(f"SHOW SCHEMAS IN DATABASE {database}").collect()
+            result = self.session.sql(
+                f"SHOW SCHEMAS IN DATABASE {self.quote_identifier(database)}"
+            ).collect()
             return [row["name"] for row in result]
         except Exception as e:
-            self.logger.error(f"Failed to list schemas in {database}: {e}")
+            self.logger.error(
+                "Failed to list schemas",
+                extra={"database": database, "error": str(e)},
+            )
             return []
+
+    def _grant_future_privileges_to_role(self, role: str, database: str) -> None:
+        sql = (
+            f"GRANT USAGE ON FUTURE SCHEMAS IN DATABASE {database} "
+            f"TO ROLE {self.quote_identifier(role)}"
+        )
+        self._execute_sql(sql, context={"role": role, "database": database})
 
     def _get_schema_comment(self, schema: str) -> str:
         """Get default comment for a canonical schema.
