@@ -1,7 +1,7 @@
 """Snowpipe ingestion strategy for continuous data loading."""
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from snowflake.snowpark import Session
 
@@ -33,11 +33,10 @@ class SnowpipeStrategy(BaseIngestionStrategy):
             config: Configuration for the Snowpipe ingestion
         """
         super().__init__(config)
-        self.session: Optional[Session] = None
 
     def set_session(self, session: Session) -> None:
         """Set the Snowflake session for this strategy."""
-        self.session = session
+        super().set_session(session)
 
     def ingest(self, source: DataSource, target: str, **kwargs: Any) -> IngestionResult:
         """Create or refresh Snowpipe."""

@@ -8,8 +8,21 @@ from snowflake_ml_template.core.base.transformation import (
     BaseTransformation,
     TransformationConfig,
     TransformationResult,
+    TransformationStatus,
     TransformationType,
 )
+
+
+class RecordingTracker:
+    """Simple tracker capture for tests."""
+
+    def __init__(self) -> None:
+        """Initialize the tracker."""
+        self.events = []
+
+    def record_event(self, component: str, event: str, payload: dict) -> None:
+        """Record an event."""
+        self.events.append((component, event, payload))
 
 
 def test_transformation_config_validation():
@@ -91,13 +104,60 @@ def test_transformation_result_duration():
 class DummyTransformation(BaseTransformation):
     """Dummy transformation for testing."""
 
+    def __init__(self, config: TransformationConfig, tracker=None) -> None:
+        """Initialize the transformation."""
+        super().__init__(config, tracker=tracker)
+        self.pre_called = False
+        self.post_called = False
+        self.error_called = False
+        self.quality_pre_called = False
+        self.quality_post_report: dict | None = None
+        self.quality_failure_called = False
+        self.raise_quality_error = False
+
     def transform(self, **kwargs):  # pragma: no cover
-        """Raise NotImplementedError."""
-        raise NotImplementedError
+        """Return successful transformation result."""
+        return TransformationResult(
+            status=TransformationStatus.SUCCESS,
+            transformation_type=self.config.transformation_type,
+            target_table=self.get_target_table_name(),
+            rows_processed=100,
+            rows_written=95,
+        )
 
     def validate(self) -> bool:  # pragma: no cover
         """Raise NotImplementedError."""
         raise NotImplementedError
+
+    def pre_transform(self) -> None:
+        """Set pre_called to True."""
+        self.pre_called = True
+
+    def post_transform(self, result: TransformationResult) -> None:
+        """Set post_called to True."""
+        self.post_called = True
+
+    def on_transform_error(self, error: Exception) -> None:  # pragma: no cover
+        """Set error_called to True."""
+        self.error_called = True
+
+    def pre_quality_checks(self) -> None:
+        """Pre-quality checks hook."""
+        self.quality_pre_called = True
+
+    def validate_output(self, result: TransformationResult) -> dict:
+        """Validate output hook."""
+        if self.raise_quality_error:
+            raise RuntimeError("quality failure")
+        return {"quality": "ok"}
+
+    def post_quality_checks(self, quality_report: dict) -> None:
+        """Post-quality checks hook."""
+        self.quality_post_report = quality_report
+
+    def on_quality_failure(self, error: Exception) -> None:
+        """Error hook."""
+        self.quality_failure_called = True
 
 
 def test_base_transformation_helpers():
@@ -112,6 +172,40 @@ def test_base_transformation_helpers():
         target_table="TT",
         warehouse="WH",
     )
-    t = DummyTransformation(cfg)
+    tracker = RecordingTracker()
+    t = DummyTransformation(cfg, tracker=tracker)
     assert t.get_source_table_name() == "SDB.SSC.ST"
     assert t.get_target_table_name() == "TDB.TSC.TT"
+
+    result = t.execute_transformation()
+
+    assert result.transformation_status == TransformationStatus.SUCCESS
+    assert "duration_seconds" in result.metrics
+    assert t.pre_called is True
+    assert t.post_called is True
+    assert tracker.events[-1][1] == "transformation_end"
+    assert t.quality_pre_called is True
+    assert t.quality_post_report == {"quality": "ok"}
+    assert t.quality_failure_called is False
+
+
+def test_transformation_quality_failure():
+    """Ensure quality failure hook executes and exception propagates."""
+    cfg = TransformationConfig(
+        transformation_type=TransformationType.SQL,
+        source_database="SDB",
+        source_schema="SSC",
+        source_table="ST",
+        target_database="TDB",
+        target_schema="TSC",
+        target_table="TT",
+        warehouse="WH",
+    )
+    t = DummyTransformation(cfg)
+    t.raise_quality_error = True
+
+    with pytest.raises(RuntimeError, match="quality failure"):
+        t.execute_transformation()
+
+    assert t.quality_pre_called is True
+    assert t.quality_failure_called is True

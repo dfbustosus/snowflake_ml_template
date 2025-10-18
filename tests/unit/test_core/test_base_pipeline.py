@@ -6,6 +6,7 @@ and test the Template Method pattern implementation.
 """
 
 from datetime import datetime
+from typing import Any, Dict
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -13,9 +14,22 @@ import pytest
 from snowflake_ml_template.core.base.pipeline import (
     BasePipeline,
     PipelineConfig,
+    PipelineExecutionStatus,
     PipelineResult,
     PipelineStage,
 )
+
+
+class RecordingTracker:
+    """Simple tracker for capturing emitted events."""
+
+    def __init__(self) -> None:
+        """Initialize the tracker."""
+        self.events = []
+
+    def record_event(self, component: str, event: str, payload: dict) -> None:
+        """Record an event."""
+        self.events.append((component, event, payload))
 
 
 class TestPipelineConfig:
@@ -155,6 +169,15 @@ class TestBasePipeline:
         class ConcretePipeline(BasePipeline):
             """Concrete pipeline implementation for testing."""
 
+            def __init__(self, session: Mock, config: PipelineConfig) -> None:
+                super().__init__(session, config)
+                self.validation_pre_called = False
+                self.validation_post_payload: Dict[str, Any] | None = None
+                self.validation_failure_called = False
+                self.monitoring_pre_called = False
+                self.monitoring_post_payload: Dict[str, Any] | None = None
+                self.monitoring_failure_called = False
+
             def engineer_features(self) -> None:
                 """Mock feature engineering."""
                 self.logger.info("Engineering features")
@@ -162,6 +185,24 @@ class TestBasePipeline:
             def train_model(self) -> None:
                 """Mock model training."""
                 self.logger.info("Training model")
+
+            def pre_validation_checks(self) -> None:
+                self.validation_pre_called = True
+
+            def post_validation_checks(self, report: Dict[str, Any]) -> None:
+                self.validation_post_payload = report
+
+            def on_validation_failure(self, error: Exception) -> None:
+                self.validation_failure_called = True
+
+            def pre_monitoring_checks(self) -> None:
+                self.monitoring_pre_called = True
+
+            def post_monitoring_checks(self, status: Dict[str, Any]) -> None:
+                self.monitoring_post_payload = status
+
+            def on_monitoring_failure(self, error: Exception) -> None:
+                self.monitoring_failure_called = True
 
         return ConcretePipeline(mock_session, valid_config)
 
@@ -229,6 +270,14 @@ class TestBasePipeline:
         assert result.start_time is not None
         assert result.end_time is not None
         assert result.duration_seconds > 0
+        assert concrete_pipeline.validation_pre_called is True
+        assert concrete_pipeline.validation_post_payload is not None
+        assert "metrics" in concrete_pipeline.validation_post_payload
+        assert concrete_pipeline.monitoring_pre_called is True
+        assert concrete_pipeline.monitoring_post_payload is not None
+        assert "metrics" in concrete_pipeline.monitoring_post_payload
+        assert concrete_pipeline.validation_failure_called is False
+        assert concrete_pipeline.monitoring_failure_called is False
 
     def test_pipeline_execution_with_feature_engineering_failure(
         self, mock_session: Mock, valid_config: PipelineConfig
@@ -249,6 +298,66 @@ class TestBasePipeline:
         assert result.error is not None
         assert "Feature engineering failed" in result.error
         assert PipelineStage.FEATURE_ENGINEERING.value in result.error
+
+    def test_pipeline_validation_failure_triggers_hook(
+        self, mock_session: Mock, valid_config: PipelineConfig
+    ) -> None:
+        """Ensure validation governance failure hook executes on error."""
+
+        class ValidationFailPipeline(BasePipeline):
+            def __init__(self, session: Mock, config: PipelineConfig) -> None:
+                super().__init__(session, config)
+                self.validation_failure_called = False
+
+            def engineer_features(self) -> None:
+                pass
+
+            def train_model(self) -> None:
+                pass
+
+            def on_validation_failure(self, error: Exception) -> None:
+                self.validation_failure_called = True
+
+            def validate_config(self) -> None:
+                raise RuntimeError("config invalid")
+
+        pipeline = ValidationFailPipeline(mock_session, valid_config)
+        result = pipeline.execute()
+
+        assert pipeline.validation_failure_called is True
+        assert result.status == PipelineExecutionStatus.FAILED.value
+        assert "config invalid" in (result.error or "")
+        assert result.stages_completed == []
+
+    def test_pipeline_monitoring_failure_triggers_hook(
+        self, mock_session: Mock, valid_config: PipelineConfig
+    ) -> None:
+        """Ensure monitoring governance failure hook executes on error."""
+
+        class MonitoringFailPipeline(BasePipeline):
+            def __init__(self, session: Mock, config: PipelineConfig) -> None:
+                super().__init__(session, config)
+                self.monitoring_failure_called = False
+
+            def engineer_features(self) -> None:
+                pass
+
+            def train_model(self) -> None:
+                pass
+
+            def on_monitoring_failure(self, error: Exception) -> None:
+                self.monitoring_failure_called = True
+
+            def setup_monitoring(self) -> None:
+                raise RuntimeError("monitoring setup failed")
+
+        pipeline = MonitoringFailPipeline(mock_session, valid_config)
+        result = pipeline.execute()
+
+        assert pipeline.monitoring_failure_called is True
+        assert result.status == PipelineExecutionStatus.FAILED.value
+        assert "monitoring setup failed" in (result.error or "")
+        assert PipelineStage.MONITORING.value not in result.stages_completed
 
     def test_pipeline_execution_with_training_failure(
         self, mock_session: Mock, valid_config: PipelineConfig
@@ -322,6 +431,34 @@ class TestBasePipeline:
         assert len(actual_stages) == len(expected_stages)
         for stage in expected_stages:
             assert stage in actual_stages
+
+    def test_pipeline_emits_stage_metrics_and_events(
+        self, mock_session: Mock, valid_config: PipelineConfig
+    ) -> None:
+        """Test that pipeline records stage metrics and tracker events."""
+
+        tracker = RecordingTracker()
+
+        class InstrumentedPipeline(BasePipeline):
+            def __init__(self, session: Mock, config: PipelineConfig) -> None:
+                super().__init__(session, config, tracker=tracker)
+
+            def engineer_features(self) -> None:
+                self.logger.info("Engineering features")
+
+            def train_model(self) -> None:
+                self.logger.info("Training model")
+
+        pipeline = InstrumentedPipeline(mock_session, valid_config)
+        result = pipeline.execute()
+
+        assert result.execution_status == PipelineExecutionStatus.SUCCESS
+        assert len(result.stage_metrics) == len(PipelineStage)
+        assert tracker.events
+        component, event, payload = tracker.events[-1]
+        assert component == "InstrumentedPipeline"
+        assert event == "pipeline_end"
+        assert payload["status"] == PipelineExecutionStatus.SUCCESS.value
 
 
 class TestPipelineTemplateMethod:

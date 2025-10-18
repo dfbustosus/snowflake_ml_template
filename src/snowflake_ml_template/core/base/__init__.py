@@ -19,35 +19,48 @@ from snowflake_ml_template.core.base.deployment import (
     BaseDeploymentStrategy,
     DeploymentConfig,
     DeploymentResult,
+    DeploymentStrategy,
+    DeploymentTarget,
 )
 from snowflake_ml_template.core.base.ingestion import (
     BaseIngestionStrategy,
     DataSource,
     IngestionConfig,
+    IngestionMethod,
     IngestionResult,
+    IngestionStatus,
+    SourceType,
 )
 from snowflake_ml_template.core.base.pipeline import (
     BasePipeline,
     PipelineConfig,
+    PipelineExecutionStatus,
     PipelineResult,
     PipelineStage,
 )
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
 from snowflake_ml_template.core.base.training import (
     BaseModelConfig,
     BaseTrainer,
+    MLFramework,
     TrainingConfig,
     TrainingResult,
+    TrainingStatus,
+    TrainingStrategy,
 )
 from snowflake_ml_template.core.base.transformation import (
     BaseTransformation,
     TransformationConfig,
     TransformationResult,
+    TransformationStatus,
+    TransformationType,
 )
 
 __all__ = [
     # Pipeline
     "BasePipeline",
     "PipelineConfig",
+    "PipelineExecutionStatus",
     "PipelineResult",
     "PipelineStage",
     # Ingestion
@@ -55,17 +68,29 @@ __all__ = [
     "DataSource",
     "IngestionConfig",
     "IngestionResult",
+    "IngestionMethod",
+    "IngestionStatus",
+    "SourceType",
     # Transformation
     "BaseTransformation",
     "TransformationConfig",
     "TransformationResult",
+    "TransformationStatus",
+    "TransformationType",
     # Training
     "BaseTrainer",
     "BaseModelConfig",
+    "MLFramework",
     "TrainingConfig",
     "TrainingResult",
+    "TrainingStatus",
+    "TrainingStrategy",
     # Deployment
     "BaseDeploymentStrategy",
     "DeploymentConfig",
     "DeploymentResult",
+    "DeploymentStrategy",
+    "DeploymentTarget",
+    # Tracking
+    "ExecutionEventTracker",
 ]

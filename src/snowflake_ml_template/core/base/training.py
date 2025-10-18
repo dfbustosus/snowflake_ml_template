@@ -15,9 +15,15 @@ Classes:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
+
+from snowflake_ml_template.core.base.tracking import (
+    ExecutionEventTracker,
+    emit_tracker_event,
+)
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
 class TrainingStrategy(Enum):
@@ -37,6 +43,14 @@ class MLFramework(Enum):
     LIGHTGBM = "lightgbm"
     PYTORCH = "pytorch"
     TENSORFLOW = "tensorflow"
+
+
+class TrainingStatus(Enum):
+    """Enumeration of training outcomes."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    PARTIAL = "partial"
 
 
 @dataclass
@@ -148,7 +162,7 @@ class TrainingResult:
         metadata: Additional result metadata
     """
 
-    status: str
+    status: str | TrainingStatus
     strategy: TrainingStrategy
     framework: MLFramework
     model_artifact_path: str = ""
@@ -166,9 +180,36 @@ class TrainingResult:
 
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
+        if isinstance(self.status, TrainingStatus):
+            self.status = self.status.value
+
         if self.start_time and self.end_time:
-            delta = self.end_time - self.start_time
+            start = self.start_time
+            end = self.end_time
+
+            if (start.tzinfo is None) != (end.tzinfo is None):
+                if start.tzinfo is not None:
+                    start = start.replace(tzinfo=None)
+                if end.tzinfo is not None:
+                    end = end.replace(tzinfo=None)
+
+            delta = end - start
             self.duration_seconds = delta.total_seconds()
+
+    @property
+    def training_status(self) -> TrainingStatus:
+        """Return the training status as an enum."""
+        if isinstance(self.status, TrainingStatus):
+            return self.status
+
+        try:
+            return TrainingStatus(self.status)
+        except ValueError:
+            if self.error:
+                return TrainingStatus.FAILED
+            if self.metrics:
+                return TrainingStatus.PARTIAL
+            return TrainingStatus.SUCCESS
 
 
 class BaseTrainer(ABC):
@@ -192,11 +233,16 @@ class BaseTrainer(ABC):
         >>> result = trainer.train(training_data)
     """
 
-    def __init__(self, config: TrainingConfig) -> None:
+    def __init__(
+        self,
+        config: TrainingConfig,
+        tracker: ExecutionEventTracker | None = None,
+    ) -> None:
         """Initialize the trainer.
 
         Args:
             config: Training configuration
+            tracker: Optional execution tracker for telemetry events
 
         Raises:
             ValueError: If config is None
@@ -205,29 +251,33 @@ class BaseTrainer(ABC):
             raise ValueError("Config cannot be None")
 
         self.config = config
-        self.logger = self._get_logger()
+        self.logger: StructuredLogger = self._get_logger()
+        self._tracker = tracker
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the trainer."""
+        logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        return get_logger(logger_name)
 
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
+    @property
+    def tracker(self) -> ExecutionEventTracker | None:
+        """Return the configured execution tracker."""
+        return self._tracker
 
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _emit_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """Emit a training event."""
+        base_payload: Dict[str, Any] = {
+            "strategy": self.config.strategy.value,
+            "framework": self.config.model_config.framework.value,
+            "training_table": self.get_training_table_name(),
+        }
+        base_payload.update(payload)
+        emit_tracker_event(
+            tracker=self._tracker,
+            component=self.__class__.__name__,
+            event=event,
+            payload=base_payload,
+        )
 
     @abstractmethod
     def train(self, data: Any, **kwargs: Any) -> TrainingResult:
@@ -264,6 +314,40 @@ class BaseTrainer(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement validate()"
         )
+
+    def pre_train(self, data: Any, **kwargs: Any) -> None:
+        """Execute hook before training begins."""
+        pass
+
+    def post_train(self, result: TrainingResult) -> None:
+        """Execute hook after successful training."""
+        pass
+
+    def on_train_error(self, error: Exception) -> None:
+        """Handle training failure in hook."""
+        pass
+
+    def pre_data_validation(self, data: Any, **kwargs: Any) -> None:
+        """Perform governance checks before training commences."""
+        pass
+
+    def validate_training_data(self, data: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Return validation report for training data."""
+        return {}
+
+    def post_data_validation(self, report: Dict[str, Any]) -> None:
+        """Handle governance reporting after data validation."""
+        pass
+
+    def on_data_validation_error(self, error: Exception) -> None:
+        """React to training data governance failures."""
+        pass
+
+    def post_model_governance(
+        self, result: TrainingResult, report: Dict[str, Any]
+    ) -> None:
+        """Handle governance activities after training completes."""
+        pass
 
     @abstractmethod
     def save_model(self, model: Any, path: str) -> str:
@@ -311,3 +395,52 @@ class BaseTrainer(ABC):
             f"{self.config.training_schema}."
             f"{self.config.training_table}"
         )
+
+    def execute_training(self, data: Any, **kwargs: Any) -> TrainingResult:
+        """Execute training with lifecycle hooks and tracking."""
+        try:
+            self.pre_data_validation(data, **kwargs)
+            validation_report = self.validate_training_data(data, **kwargs)
+            self.post_data_validation(validation_report)
+        except Exception as validation_error:
+            self.on_data_validation_error(validation_error)
+            raise
+
+        self._emit_event(
+            event="training_start",
+            payload={
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data_summary": kwargs.get("data_summary"),
+            },
+        )
+        self.pre_train(data, **kwargs)
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            result = self.train(data=data, **kwargs)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            result.metrics.setdefault("duration_seconds", duration)
+            result.start_time = result.start_time or start_time
+            result.end_time = result.end_time or datetime.now(timezone.utc)
+            self.post_model_governance(result, validation_report)
+            self.post_train(result)
+            self._emit_event(
+                event="training_end",
+                payload={
+                    "status": result.status,
+                    "metrics": result.metrics,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return result
+        except Exception as exc:
+            self.logger.error("Training failed", exc_info=True)
+            self.on_train_error(exc)
+            self._emit_event(
+                event="training_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise

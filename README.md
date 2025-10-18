@@ -1,5 +1,29 @@
 # Golden Snowflake MLOps Framework
 
+<p align="left">
+  <a href="https://github.com/dfbustosus/snowflake_ml_template/actions/workflows/pre-commit.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/dfbustosus/snowflake_ml_template/pre-commit.yml?label=CI" alt="CI Status" />
+  </a>
+  <a href="https://github.com/dfbustosus/snowflake_ml_template/actions/workflows/python-lint.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/dfbustosus/snowflake_ml_template/python-lint.yml?label=Lint" alt="Lint Status" />
+  </a>
+  <a href="https://github.com/dfbustosus/snowflake_ml_template/actions/workflows/docs.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/dfbustosus/snowflake_ml_template/docs.yml?label=Docs" alt="Docs Status" />
+  </a>
+  <a href="https://img.shields.io/badge/mypy-checked-2A5DFF">
+    <img src="https://img.shields.io/badge/mypy-checked-2A5DFF" alt="Static Typing" />
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB" alt="Python Versions" />
+  <img src="https://img.shields.io/badge/Snowflake-Snowpark-29B5E8" alt="Snowflake Snowpark" />
+  <img src="https://img.shields.io/badge/ML_Frameworks-LightGBM%20%7C%20XGBoost%20%7C%20PyTorch%20%7C%20TensorFlow-EF6C00" alt="ML Frameworks" />
+  <img src="https://img.shields.io/badge/Orchestration-Snowflake%20Tasks%20%26%20Streams-3C6E71" alt="Orchestration" />
+  <img src="https://img.shields.io/badge/Feature%20Store-Point--in--Time%20%7C%20Lineage-6C5CE7" alt="Feature Store" />
+  <img src="https://img.shields.io/badge/Monitoring-Data%20%7C%20Model%20%7C%20Infra-A3A1FB" alt="Monitoring" />
+  <img src="https://img.shields.io/badge/Deployment-UDF%20%7C%20SPCS-F39C12" alt="Deployment Targets" />
+  <img src="https://img.shields.io/badge/Security-Bandit%20%7C%20Safety-DD2C00" alt="Security Tooling" />
+  <img src="https://img.shields.io/github/license/dfbustosus/snowflake_ml_template" alt="License" />
+</p>
+
 Production-ready MLOps framework for Snowflake with complete automation from data ingestion to model deployment.
 
 ## Quick Start

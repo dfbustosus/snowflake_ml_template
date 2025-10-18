@@ -14,9 +14,15 @@ Classes:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
+
+from snowflake_ml_template.core.base.tracking import (
+    ExecutionEventTracker,
+    emit_tracker_event,
+)
+from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
 class DeploymentStrategy(Enum):
@@ -33,6 +39,14 @@ class DeploymentTarget(Enum):
     BATCH = "batch"
     REALTIME = "realtime"
     STREAMING = "streaming"
+
+
+class DeploymentStatus(Enum):
+    """Enumeration of deployment outcomes."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    PARTIAL = "partial"
 
 
 @dataclass
@@ -114,7 +128,7 @@ class DeploymentResult:
         metadata: Additional result metadata
     """
 
-    status: str
+    status: str | DeploymentStatus
     strategy: DeploymentStrategy
     target: DeploymentTarget
     deployment_name: str
@@ -126,12 +140,40 @@ class DeploymentResult:
     duration_seconds: float = 0.0
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    metrics: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
+        if isinstance(self.status, DeploymentStatus):
+            self.status = self.status.value
+
         if self.start_time and self.end_time:
-            delta = self.end_time - self.start_time
+            start = self.start_time
+            end = self.end_time
+
+            if (start.tzinfo is None) != (end.tzinfo is None):
+                if start.tzinfo is not None:
+                    start = start.replace(tzinfo=None)
+                if end.tzinfo is not None:
+                    end = end.replace(tzinfo=None)
+
+            delta = end - start
             self.duration_seconds = delta.total_seconds()
+
+    @property
+    def deployment_status(self) -> DeploymentStatus:
+        """Return deployment status as an enum."""
+        if isinstance(self.status, DeploymentStatus):
+            return self.status
+
+        try:
+            return DeploymentStatus(self.status)
+        except ValueError:
+            if self.error:
+                return DeploymentStatus.FAILED
+            return (
+                DeploymentStatus.PARTIAL if self.metrics else DeploymentStatus.SUCCESS
+            )
 
 
 class BaseDeploymentStrategy(ABC):
@@ -161,11 +203,16 @@ class BaseDeploymentStrategy(ABC):
         >>> result = strategy.deploy()
     """
 
-    def __init__(self, config: DeploymentConfig) -> None:
+    def __init__(
+        self,
+        config: DeploymentConfig,
+        tracker: ExecutionEventTracker | None = None,
+    ) -> None:
         """Initialize the deployment strategy.
 
         Args:
             config: Deployment configuration
+            tracker: Optional execution tracker for telemetry events
 
         Raises:
             ValueError: If config is None
@@ -174,29 +221,33 @@ class BaseDeploymentStrategy(ABC):
             raise ValueError("Config cannot be None")
 
         self.config = config
-        self.logger = self._get_logger()
+        self.logger: StructuredLogger = self._get_logger()
+        self._tracker = tracker
 
-    def _get_logger(self) -> Any:
-        """Get logger instance.
+    def _get_logger(self) -> StructuredLogger:
+        """Return a structured logger scoped to the deployment strategy."""
+        logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        return get_logger(logger_name)
 
-        This is a placeholder that will be replaced with proper
-        structured logging in Day 3.
+    @property
+    def tracker(self) -> ExecutionEventTracker | None:
+        """Return the configured execution tracker."""
+        return self._tracker
 
-        Returns:
-            Logger instance
-        """
-        import logging
-
-        logger = logging.getLogger(self.__class__.__name__)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    def _emit_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """Emit a deployment-related event."""
+        base_payload: Dict[str, Any] = {
+            "strategy": self.config.strategy.value,
+            "target": self.config.target.value,
+            "deployment_name": self.config.deployment_name,
+        }
+        base_payload.update(payload)
+        emit_tracker_event(
+            tracker=self._tracker,
+            component=self.__class__.__name__,
+            event=event,
+            payload=base_payload,
+        )
 
     @abstractmethod
     def deploy(self, **kwargs: Any) -> DeploymentResult:
@@ -216,6 +267,18 @@ class BaseDeploymentStrategy(ABC):
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement deploy()")
 
+    def pre_deploy(self, **kwargs: Any) -> None:
+        """Execute hook before deployment begins."""
+        pass
+
+    def post_deploy(self, result: DeploymentResult) -> None:
+        """Execute hook after successful deployment."""
+        pass
+
+    def on_deploy_error(self, error: Exception) -> None:
+        """Handle deployment failure in hook."""
+        pass
+
     @abstractmethod
     def undeploy(self) -> bool:
         """Remove the deployment.
@@ -231,6 +294,38 @@ class BaseDeploymentStrategy(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement undeploy()"
         )
+
+    def pre_undeploy(self) -> None:
+        """Execute hook before undeployment."""
+        pass
+
+    def post_undeploy(self, success: bool) -> None:
+        """Execute hook after undeployment completes."""
+        pass
+
+    def on_undeploy_error(self, error: Exception) -> None:
+        """Handle undeployment failure in hook."""
+        pass
+
+    def pre_compliance_check(self, action: str, context: Dict[str, Any]) -> None:
+        """Perform governance checks before executing a deployment action."""
+        pass
+
+    def validate_compliance(
+        self, action: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Return compliance report for the requested deployment action."""
+        return {}
+
+    def post_compliance_check(
+        self, action: str, outcome: Dict[str, Any], report: Dict[str, Any]
+    ) -> None:
+        """Handle governance reporting after a deployment action completes."""
+        pass
+
+    def on_compliance_failure(self, action: str, error: Exception) -> None:
+        """React to deployment governance failures."""
+        pass
 
     @abstractmethod
     def validate(self) -> bool:
@@ -266,6 +361,18 @@ class BaseDeploymentStrategy(ABC):
             f"{self.__class__.__name__} must implement health_check()"
         )
 
+    def pre_health_check(self) -> None:
+        """Execute hook before health check."""
+        pass
+
+    def post_health_check(self, status: Dict[str, Any]) -> None:
+        """Execute hook after health check completes."""
+        pass
+
+    def on_health_check_error(self, error: Exception) -> None:
+        """Handle health-check failure in hook."""
+        pass
+
     def get_deployment_full_name(self) -> str:
         """Get fully qualified deployment name.
 
@@ -277,3 +384,161 @@ class BaseDeploymentStrategy(ABC):
             f"{self.config.deployment_schema}."
             f"{self.config.deployment_name}"
         )
+
+    def execute_deploy(self, **kwargs: Any) -> DeploymentResult:
+        """Execute deployment with lifecycle hooks and tracking."""
+        compliance_context = {"parameters": kwargs}
+        try:
+            self.pre_compliance_check(action="deploy", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="deploy", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="deploy", error=compliance_error)
+            raise
+
+        self._emit_event(
+            event="deployment_start",
+            payload={"timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+        self.pre_deploy(**kwargs)
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            result = self.deploy(**kwargs)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            result.metrics.setdefault("duration_seconds", duration)
+            result.start_time = result.start_time or start_time
+            result.end_time = result.end_time or datetime.now(timezone.utc)
+            try:
+                self.post_compliance_check(
+                    action="deploy",
+                    outcome={"status": result.status, "metrics": result.metrics},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(action="deploy", error=compliance_error)
+                raise
+            self.post_deploy(result)
+            self._emit_event(
+                event="deployment_end",
+                payload={
+                    "status": result.status,
+                    "metrics": result.metrics,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return result
+        except Exception as exc:
+            self.logger.error("Deployment failed", exc_info=True)
+            self.on_deploy_error(exc)
+            self._emit_event(
+                event="deployment_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise
+
+    def execute_undeploy(self) -> bool:
+        """Execute undeployment with hooks and tracking."""
+        compliance_context: Dict[str, Any] = {}
+        try:
+            self.pre_compliance_check(action="undeploy", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="undeploy", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="undeploy", error=compliance_error)
+            raise
+
+        self._emit_event(
+            event="undeploy_start",
+            payload={"timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+        self.pre_undeploy()
+
+        try:
+            success = self.undeploy()
+            try:
+                self.post_compliance_check(
+                    action="undeploy",
+                    outcome={"success": success},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(action="undeploy", error=compliance_error)
+                raise
+            self.post_undeploy(success)
+            self._emit_event(
+                event="undeploy_end",
+                payload={
+                    "success": success,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return success
+        except Exception as exc:
+            self.logger.error("Undeploy failed", exc_info=True)
+            self.on_undeploy_error(exc)
+            self._emit_event(
+                event="undeploy_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise
+
+    def execute_health_check(self) -> Dict[str, Any]:
+        """Execute health check with hooks and tracking."""
+        compliance_context: Dict[str, Any] = {}
+        try:
+            self.pre_compliance_check(action="health_check", context=compliance_context)
+            compliance_report = self.validate_compliance(
+                action="health_check", context=compliance_context
+            )
+        except Exception as compliance_error:
+            self.on_compliance_failure(action="health_check", error=compliance_error)
+            raise
+
+        self._emit_event(
+            event="health_check_start",
+            payload={"timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+        self.pre_health_check()
+
+        try:
+            status = self.health_check()
+            try:
+                self.post_compliance_check(
+                    action="health_check",
+                    outcome={"status": status},
+                    report=compliance_report,
+                )
+            except Exception as compliance_error:
+                self.on_compliance_failure(
+                    action="health_check", error=compliance_error
+                )
+                raise
+            self.post_health_check(status)
+            self._emit_event(
+                event="health_check_end",
+                payload={
+                    "status": status,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return status
+        except Exception as exc:
+            self.logger.error("Health check failed", exc_info=True)
+            self.on_health_check_error(exc)
+            self._emit_event(
+                event="health_check_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise
