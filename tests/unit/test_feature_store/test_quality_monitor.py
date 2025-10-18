@@ -17,8 +17,12 @@ def test_quality_monitor_check_nulls(mock_session):
 
     # Mock dataframe
     df = Mock()
-    df.select.return_value.agg.return_value.collect.return_value = [{"null_count": 5}]
+    filtered_df = Mock()
+    df.filter.return_value = filtered_df
+    filtered_df.count.return_value = 5
 
-    monitor.check_nulls(df, "feature_col")
+    result = monitor.check_nulls(df, "feature_col")
 
-    assert True  # Interface test passed
+    assert result == 5
+    df.filter.assert_called_once()
+    filtered_df.count.assert_called_once()

@@ -5,7 +5,7 @@ import tempfile
 from datetime import datetime
 from typing import Any
 
-import joblib  # type: ignore[import]
+import joblib
 
 from snowflake_ml_template.core.base.training import (
     BaseTrainer,
@@ -33,11 +33,11 @@ class SklearnTrainer(BaseTrainer):
         start_time = datetime.utcnow()
 
         try:
-            from sklearn.ensemble import (  # type: ignore[import]
+            from sklearn.ensemble import (
                 GradientBoostingClassifier,
                 RandomForestClassifier,
             )
-            from sklearn.linear_model import LogisticRegression  # type: ignore[import]
+            from sklearn.linear_model import LogisticRegression
 
             # Convert Snowpark DataFrame to pandas if needed
             if hasattr(data, "to_pandas"):

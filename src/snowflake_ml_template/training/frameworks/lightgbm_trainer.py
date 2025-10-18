@@ -5,7 +5,7 @@ import tempfile
 from datetime import datetime
 from typing import Any
 
-import joblib  # type: ignore[import]
+import joblib
 
 from snowflake_ml_template.core.base.training import (
     BaseTrainer,
@@ -33,7 +33,7 @@ class LightGBMTrainer(BaseTrainer):
         start_time = datetime.utcnow()
 
         try:
-            import lightgbm as lgb  # type: ignore[import]
+            import lightgbm as lgb
 
             # Convert Snowpark DataFrame to pandas if needed
             if hasattr(data, "to_pandas"):
