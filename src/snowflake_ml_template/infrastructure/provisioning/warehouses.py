@@ -7,12 +7,12 @@ Classes:
     WarehouseProvisioner: Create and manage warehouses
 """
 
-from typing import Dict, List, Optional, TypedDict
+from typing import Dict, Iterable, List, Optional, TypedDict
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.exceptions import ConfigurationError
-from snowflake_ml_template.utils.logging import get_logger
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
+from snowflake_ml_template.infrastructure.provisioning.base import BaseProvisioner
 
 
 class WarehouseConfig(TypedDict):
@@ -26,7 +26,7 @@ class WarehouseConfig(TypedDict):
     comment: str
 
 
-class WarehouseProvisioner:
+class WarehouseProvisioner(BaseProvisioner):
     """Provision and manage Snowflake warehouses.
 
     This class handles warehouse creation following the Golden Migration Plan:
@@ -79,19 +79,13 @@ class WarehouseProvisioner:
         },
     }
 
-    def __init__(self, session: Session) -> None:
-        """Initialize the WarehouseProvisioner with a Snowflake session.
-
-        Args:
-            session: An active Snowflake session for executing warehouse operations.
-
-        Raises:
-            ValueError: If the provided session is None.
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-        self.session = session
-        self.logger = get_logger(__name__)
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize `WarehouseProvisioner` with a Snowflake session."""
+        super().__init__(session=session, tracker=tracker)
 
     def create_mlops_warehouses(self) -> Dict[str, bool]:
         """Create all standard MLOps warehouses.
@@ -127,50 +121,86 @@ class WarehouseProvisioner:
         min_cluster_count: int = 1,
         max_cluster_count: int = 1,
         comment: Optional[str] = None,
+        *,
+        statement_timeout_in_seconds: Optional[int] = None,
+        tags: Optional[Dict[str, str]] = None,
+        resource_monitor: Optional[str] = None,
+        scaling_policy: Optional[str] = None,
+        grants_to_roles: Optional[Iterable[str]] = None,
     ) -> bool:
         """Create a warehouse if it doesn't exist."""
         if not name:
             raise ValueError("Warehouse name cannot be empty")
 
-        self.logger.info(f"Creating warehouse: {name}")
+        warehouse_identifier = self.quote_identifier(name)
+        self.logger.info(
+            "Creating warehouse",
+            extra={
+                "warehouse": name,
+                "size": size,
+                "type": type,
+            },
+        )
 
-        try:
-            sql_parts = [f"CREATE WAREHOUSE IF NOT EXISTS {name} WITH"]
-            sql_parts.append(f"WAREHOUSE_SIZE = '{size}'")
+        clauses = [f"CREATE WAREHOUSE IF NOT EXISTS {warehouse_identifier} WITH"]
+        clauses.append(f"WAREHOUSE_SIZE = {self.quote_literal(size)}")
 
-            if type != "STANDARD":
-                sql_parts.append(f"WAREHOUSE_TYPE = '{type}'")
+        if type != "STANDARD":
+            clauses.append(f"WAREHOUSE_TYPE = {self.quote_literal(type)}")
 
-            sql_parts.append(f"AUTO_SUSPEND = {auto_suspend}")
-            sql_parts.append(f"AUTO_RESUME = {str(auto_resume).upper()}")
-            sql_parts.append(f"MIN_CLUSTER_COUNT = {min_cluster_count}")
-            sql_parts.append(f"MAX_CLUSTER_COUNT = {max_cluster_count}")
+        clauses.append(f"AUTO_SUSPEND = {auto_suspend}")
+        clauses.append(f"AUTO_RESUME = {str(auto_resume).upper()}")
+        clauses.append(f"MIN_CLUSTER_COUNT = {min_cluster_count}")
+        clauses.append(f"MAX_CLUSTER_COUNT = {max_cluster_count}")
 
-            if comment:
-                sql_parts.append(f"COMMENT = '{comment}'")
-
-            sql = " ".join(sql_parts)
-            self.session.sql(sql).collect()
-
-            self.logger.info(
-                f"Warehouse created: {name}", extra={"size": size, "type": type}
+        if statement_timeout_in_seconds is not None:
+            clauses.append(
+                f"STATEMENT_TIMEOUT_IN_SECONDS = {statement_timeout_in_seconds}"
             )
-            return True
 
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create warehouse: {name}", extra={"error": str(e)}
+        if scaling_policy:
+            clauses.append(f"SCALING_POLICY = {self.quote_literal(scaling_policy)}")
+
+        if resource_monitor:
+            clauses.append(
+                f"RESOURCE_MONITOR = {self.quote_identifier(resource_monitor)}"
             )
-            raise ConfigurationError(
-                f"Failed to create warehouse: {name}",
+
+        if comment:
+            clauses.append(f"COMMENT = {self.quote_literal(comment)}")
+
+        sql = " ".join(clauses)
+
+        with self.transactional():
+            self._execute_sql(
+                sql,
                 context={"warehouse": name},
-                original_error=e,
+                emit_event="warehouse_created",
             )
+
+            if tags:
+                self._apply_tags("WAREHOUSE", warehouse_identifier, tags)
+
+            if grants_to_roles:
+                for role in grants_to_roles:
+                    grant_sql = (
+                        f"GRANT OWNERSHIP ON WAREHOUSE {warehouse_identifier} "
+                        f"TO ROLE {self.quote_identifier(role)}"
+                    )
+                    self._execute_sql(
+                        grant_sql,
+                        context={"warehouse": name, "role": role},
+                        emit_event="warehouse_grant_ownership",
+                    )
+
+        return True
 
     def warehouse_exists(self, name: str) -> bool:
         """Check if a warehouse exists."""
         try:
-            result = self.session.sql(f"SHOW WAREHOUSES LIKE '{name}'").collect()
+            result = self.session.sql(
+                f"SHOW WAREHOUSES LIKE {self.quote_literal(name)}"
+            ).collect()
             return len(result) > 0
         except Exception:
             return False
@@ -181,5 +211,5 @@ class WarehouseProvisioner:
             result = self.session.sql("SHOW WAREHOUSES").collect()
             return [row["name"] for row in result]
         except Exception as e:
-            self.logger.error(f"Failed to list warehouses: {e}")
+            self.logger.error("Failed to list warehouses", extra={"error": str(e)})
             return []
