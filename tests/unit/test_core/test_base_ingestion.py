@@ -10,8 +10,21 @@ from snowflake_ml_template.core.base.ingestion import (
     IngestionConfig,
     IngestionMethod,
     IngestionResult,
+    IngestionStatus,
     SourceType,
 )
+
+
+class RecordingTracker:
+    """Simple tracker implementation for tests."""
+
+    def __init__(self) -> None:
+        """Initialize the tracker."""
+        self.events = []
+
+    def record_event(self, component: str, event: str, payload: dict) -> None:
+        """Record an event."""
+        self.events.append((component, event, payload))
 
 
 def test_datasource_validation():
@@ -104,13 +117,38 @@ def test_ingestion_result_duration():
 class DummyStrategy(BaseIngestionStrategy):
     """Dummy strategy for testing."""
 
+    def __init__(self, config: IngestionConfig, tracker=None) -> None:
+        """Initialize the dummy strategy."""
+        super().__init__(config, tracker=tracker)
+        self.pre_called = False
+        self.post_called = False
+        self.error_called = False
+
     def ingest(self, source, target, **kwargs):  # pragma: no cover
-        """Raise NotImplementedError."""
-        raise NotImplementedError
+        """Return a successful ingestion result for testing."""
+        return IngestionResult(
+            status=IngestionStatus.SUCCESS,
+            method=self.config.method,
+            target_table=target,
+            rows_loaded=10,
+            files_processed=1,
+        )
 
     def validate(self) -> bool:  # pragma: no cover
         """Raise NotImplementedError."""
         raise NotImplementedError
+
+    def pre_ingest(self, source):
+        """Pre-ingest hook."""
+        self.pre_called = True
+
+    def post_ingest(self, result: IngestionResult):
+        """Post-ingest hook."""
+        self.post_called = True
+
+    def on_ingest_error(self, error: Exception):  # pragma: no cover
+        """Error hook."""
+        self.error_called = True
 
 
 def test_base_ingestion_strategy_helpers():
@@ -124,5 +162,14 @@ def test_base_ingestion_strategy_helpers():
         target_table="T",
         warehouse="WH",
     )
-    strat = DummyStrategy(cfg)
+    tracker = RecordingTracker()
+    strat = DummyStrategy(cfg, tracker=tracker)
     assert strat.get_target_table_name() == "DB.SC.T"
+
+    result = strat.execute_ingestion(ds, strat.get_target_table_name())
+
+    assert result.ingestion_status == IngestionStatus.SUCCESS
+    assert result.metrics["duration_seconds"] >= 0
+    assert strat.pre_called is True
+    assert strat.post_called is True
+    assert tracker.events[-1][1] == "ingestion_end"

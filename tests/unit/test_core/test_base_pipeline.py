@@ -13,9 +13,22 @@ import pytest
 from snowflake_ml_template.core.base.pipeline import (
     BasePipeline,
     PipelineConfig,
+    PipelineExecutionStatus,
     PipelineResult,
     PipelineStage,
 )
+
+
+class RecordingTracker:
+    """Simple tracker for capturing emitted events."""
+
+    def __init__(self) -> None:
+        """Initialize the tracker."""
+        self.events = []
+
+    def record_event(self, component: str, event: str, payload: dict) -> None:
+        """Record an event."""
+        self.events.append((component, event, payload))
 
 
 class TestPipelineConfig:
@@ -322,6 +335,34 @@ class TestBasePipeline:
         assert len(actual_stages) == len(expected_stages)
         for stage in expected_stages:
             assert stage in actual_stages
+
+    def test_pipeline_emits_stage_metrics_and_events(
+        self, mock_session: Mock, valid_config: PipelineConfig
+    ) -> None:
+        """Test that pipeline records stage metrics and tracker events."""
+
+        tracker = RecordingTracker()
+
+        class InstrumentedPipeline(BasePipeline):
+            def __init__(self, session: Mock, config: PipelineConfig) -> None:
+                super().__init__(session, config, tracker=tracker)
+
+            def engineer_features(self) -> None:
+                self.logger.info("Engineering features")
+
+            def train_model(self) -> None:
+                self.logger.info("Training model")
+
+        pipeline = InstrumentedPipeline(mock_session, valid_config)
+        result = pipeline.execute()
+
+        assert result.execution_status == PipelineExecutionStatus.SUCCESS
+        assert len(result.stage_metrics) == len(PipelineStage)
+        assert tracker.events
+        component, event, payload = tracker.events[-1]
+        assert component == "InstrumentedPipeline"
+        assert event == "pipeline_end"
+        assert payload["status"] == PipelineExecutionStatus.SUCCESS.value
 
 
 class TestPipelineTemplateMethod:

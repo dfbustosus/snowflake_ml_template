@@ -1,9 +1,7 @@
 """COPY INTO ingestion strategy for bulk data loading."""
 
-from datetime import datetime
-from typing import Any, Optional
-
-from snowflake.snowpark import Session
+from datetime import datetime, timezone
+from typing import Any
 
 from snowflake_ml_template.core.base.ingestion import (
     BaseIngestionStrategy,
@@ -39,40 +37,8 @@ class CopyIntoStrategy(BaseIngestionStrategy):
     """
 
     def __init__(self, config: IngestionConfig) -> None:
-        """Initialize the CopyIntoStrategy with an IngestionConfig.
-
-        Args:
-            config: Configuration for the COPY INTO ingestion
-        """
+        """Initialize the CopyIntoStrategy with an IngestionConfig."""
         super().__init__(config)
-        self._session: Optional[Session] = None
-
-    def set_session(self, session: Session) -> None:
-        """Set the Snowflake session for this strategy.
-
-        Args:
-            session: Active Snowflake session to use for operations
-
-        Raises:
-            ValueError: If session is None
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-        self._session = session
-
-    @property
-    def session(self) -> Session:
-        """Get the active Snowflake session.
-
-        Returns:
-            The active Snowflake session
-
-        Raises:
-            ValueError: If session is not set
-        """
-        if self._session is None:
-            raise ValueError("Session is not set. Call set_session() first.")
-        return self._session
 
     def ingest(self, source: DataSource, target: str, **kwargs: Any) -> IngestionResult:
         """Execute COPY INTO for bulk data loading.
@@ -85,7 +51,7 @@ class CopyIntoStrategy(BaseIngestionStrategy):
         Returns:
             IngestionResult containing the result of the operation
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
 
         try:
             sql = f"""
@@ -107,7 +73,7 @@ class CopyIntoStrategy(BaseIngestionStrategy):
                 rows_loaded=rows_loaded,
                 files_processed=files_processed,
                 start_time=start_time,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
             )
         except Exception as e:
             logger.error(f"COPY INTO failed: {e}")
@@ -116,7 +82,7 @@ class CopyIntoStrategy(BaseIngestionStrategy):
                 method=IngestionMethod.COPY_INTO,
                 target_table=target,
                 start_time=start_time,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 error=str(e),
             )
 

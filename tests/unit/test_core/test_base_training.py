@@ -7,8 +7,22 @@ from snowflake_ml_template.core.base.training import (
     BaseTrainer,
     MLFramework,
     TrainingConfig,
+    TrainingResult,
+    TrainingStatus,
     TrainingStrategy,
 )
+
+
+class RecordingTracker:
+    """Simple tracker implementation for training tests."""
+
+    def __init__(self) -> None:
+        """Initialize the tracker."""
+        self.events = []
+
+    def record_event(self, component: str, event: str, payload: dict) -> None:
+        """Record an event."""
+        self.events.append((component, event, payload))
 
 
 def test_base_model_config_validation():
@@ -86,9 +100,21 @@ def test_training_config_validation_edges():
 class DummyTrainer(BaseTrainer):
     """Dummy trainer for testing."""
 
+    def __init__(self, config: TrainingConfig, tracker=None) -> None:
+        """Initialize the trainer."""
+        super().__init__(config, tracker=tracker)
+        self.pre_called = False
+        self.post_called = False
+        self.error_called = False
+
     def train(self, data, **kwargs):  # pragma: no cover
-        """Raise NotImplementedError."""
-        raise NotImplementedError
+        """Return a successful training result."""
+        return TrainingResult(
+            status=TrainingStatus.SUCCESS,
+            strategy=self.config.strategy,
+            framework=self.config.model_config.framework,
+            metrics={"accuracy": 0.9},
+        )
 
     def validate(self) -> bool:  # pragma: no cover
         """Raise NotImplementedError."""
@@ -114,5 +140,12 @@ def test_base_trainer_helpers():
         training_table="T",
         warehouse="WH",
     )
-    trainer = DummyTrainer(cfg)
+    tracker = RecordingTracker()
+    trainer = DummyTrainer(cfg, tracker=tracker)
     assert trainer.get_training_table_name() == "DB.SC.T"
+
+    result = trainer.execute_training(data="dummy")
+
+    assert result.training_status == TrainingStatus.SUCCESS
+    assert "duration_seconds" in result.metrics
+    assert tracker.events[-1][1] == "training_end"

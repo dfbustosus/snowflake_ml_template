@@ -15,10 +15,14 @@ Classes:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from snowflake_ml_template.core.base.tracking import (
+    ExecutionEventTracker,
+    emit_tracker_event,
+)
 from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
@@ -39,6 +43,14 @@ class MLFramework(Enum):
     LIGHTGBM = "lightgbm"
     PYTORCH = "pytorch"
     TENSORFLOW = "tensorflow"
+
+
+class TrainingStatus(Enum):
+    """Enumeration of training outcomes."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    PARTIAL = "partial"
 
 
 @dataclass
@@ -150,7 +162,7 @@ class TrainingResult:
         metadata: Additional result metadata
     """
 
-    status: str
+    status: str | TrainingStatus
     strategy: TrainingStrategy
     framework: MLFramework
     model_artifact_path: str = ""
@@ -168,6 +180,9 @@ class TrainingResult:
 
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
+        if isinstance(self.status, TrainingStatus):
+            self.status = self.status.value
+
         if self.start_time and self.end_time:
             start = self.start_time
             end = self.end_time
@@ -180,6 +195,21 @@ class TrainingResult:
 
             delta = end - start
             self.duration_seconds = delta.total_seconds()
+
+    @property
+    def training_status(self) -> TrainingStatus:
+        """Return the training status as an enum."""
+        if isinstance(self.status, TrainingStatus):
+            return self.status
+
+        try:
+            return TrainingStatus(self.status)
+        except ValueError:
+            if self.error:
+                return TrainingStatus.FAILED
+            if self.metrics:
+                return TrainingStatus.PARTIAL
+            return TrainingStatus.SUCCESS
 
 
 class BaseTrainer(ABC):
@@ -203,11 +233,16 @@ class BaseTrainer(ABC):
         >>> result = trainer.train(training_data)
     """
 
-    def __init__(self, config: TrainingConfig) -> None:
+    def __init__(
+        self,
+        config: TrainingConfig,
+        tracker: ExecutionEventTracker | None = None,
+    ) -> None:
         """Initialize the trainer.
 
         Args:
             config: Training configuration
+            tracker: Optional execution tracker for telemetry events
 
         Raises:
             ValueError: If config is None
@@ -217,11 +252,32 @@ class BaseTrainer(ABC):
 
         self.config = config
         self.logger: StructuredLogger = self._get_logger()
+        self._tracker = tracker
 
     def _get_logger(self) -> StructuredLogger:
         """Return a structured logger scoped to the trainer."""
         logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
         return get_logger(logger_name)
+
+    @property
+    def tracker(self) -> ExecutionEventTracker | None:
+        """Return the configured execution tracker."""
+        return self._tracker
+
+    def _emit_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """Emit a training event."""
+        base_payload: Dict[str, Any] = {
+            "strategy": self.config.strategy.value,
+            "framework": self.config.model_config.framework.value,
+            "training_table": self.get_training_table_name(),
+        }
+        base_payload.update(payload)
+        emit_tracker_event(
+            tracker=self._tracker,
+            component=self.__class__.__name__,
+            event=event,
+            payload=base_payload,
+        )
 
     @abstractmethod
     def train(self, data: Any, **kwargs: Any) -> TrainingResult:
@@ -258,6 +314,18 @@ class BaseTrainer(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement validate()"
         )
+
+    def pre_train(self, data: Any, **kwargs: Any) -> None:
+        """Execute hook before training begins."""
+        pass
+
+    def post_train(self, result: TrainingResult) -> None:
+        """Execute hook after successful training."""
+        pass
+
+    def on_train_error(self, error: Exception) -> None:
+        """Handle training failure in hook."""
+        pass
 
     @abstractmethod
     def save_model(self, model: Any, path: str) -> str:
@@ -305,3 +373,43 @@ class BaseTrainer(ABC):
             f"{self.config.training_schema}."
             f"{self.config.training_table}"
         )
+
+    def execute_training(self, data: Any, **kwargs: Any) -> TrainingResult:
+        """Execute training with lifecycle hooks and tracking."""
+        self._emit_event(
+            event="training_start",
+            payload={
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data_summary": kwargs.get("data_summary"),
+            },
+        )
+        self.pre_train(data, **kwargs)
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            result = self.train(data=data, **kwargs)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            result.metrics.setdefault("duration_seconds", duration)
+            result.start_time = result.start_time or start_time
+            result.end_time = result.end_time or datetime.now(timezone.utc)
+            self.post_train(result)
+            self._emit_event(
+                event="training_end",
+                payload={
+                    "status": result.status,
+                    "metrics": result.metrics,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return result
+        except Exception as exc:
+            self.logger.error("Training failed", exc_info=True)
+            self.on_train_error(exc)
+            self._emit_event(
+                event="training_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise

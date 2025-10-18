@@ -12,10 +12,14 @@ Classes:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from snowflake_ml_template.core.base.tracking import (
+    ExecutionEventTracker,
+    emit_tracker_event,
+)
 from snowflake_ml_template.utils.logging import StructuredLogger, get_logger
 
 
@@ -26,6 +30,14 @@ class TransformationType(Enum):
     SQL = "sql"
     DBT = "dbt"
     DYNAMIC_TABLE = "dynamic_table"
+
+
+class TransformationStatus(Enum):
+    """Enumeration of transformation outcomes."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    PARTIAL = "partial"
 
 
 @dataclass
@@ -93,7 +105,7 @@ class TransformationResult:
         metadata: Additional result metadata
     """
 
-    status: str
+    status: str | TransformationStatus
     transformation_type: TransformationType
     target_table: str
     rows_processed: int = 0
@@ -103,9 +115,13 @@ class TransformationResult:
     duration_seconds: float = 0.0
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    metrics: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
+        if isinstance(self.status, TransformationStatus):
+            self.status = self.status.value
+
         if self.start_time and self.end_time:
             start = self.start_time
             end = self.end_time
@@ -118,6 +134,21 @@ class TransformationResult:
 
             delta = end - start
             self.duration_seconds = delta.total_seconds()
+
+    @property
+    def transformation_status(self) -> TransformationStatus:
+        """Return the transformation status as an enum."""
+        if isinstance(self.status, TransformationStatus):
+            return self.status
+
+        try:
+            return TransformationStatus(self.status)
+        except ValueError:
+            if self.error:
+                return TransformationStatus.FAILED
+            if self.rows_written and self.rows_processed:
+                return TransformationStatus.PARTIAL
+            return TransformationStatus.SUCCESS
 
 
 class BaseTransformation(ABC):
@@ -141,11 +172,16 @@ class BaseTransformation(ABC):
         >>> result = transformation.transform()
     """
 
-    def __init__(self, config: TransformationConfig) -> None:
+    def __init__(
+        self,
+        config: TransformationConfig,
+        tracker: ExecutionEventTracker | None = None,
+    ) -> None:
         """Initialize the transformation.
 
         Args:
             config: Transformation configuration
+            tracker: Optional execution tracker for telemetry events
 
         Raises:
             ValueError: If config is None
@@ -155,11 +191,31 @@ class BaseTransformation(ABC):
 
         self.config = config
         self.logger: StructuredLogger = self._get_logger()
+        self._tracker = tracker
 
     def _get_logger(self) -> StructuredLogger:
-        """Return a structured logger scoped to the transformation."""
+        """Retrieve a structured logger scoped to the transformation."""
         logger_name = f"{self.__class__.__module__}.{self.__class__.__name__}"
         return get_logger(logger_name)
+
+    @property
+    def tracker(self) -> ExecutionEventTracker | None:
+        """Return the configured execution tracker."""
+        return self._tracker
+
+    def _emit_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """Emit a transformation event."""
+        base_payload: Dict[str, Any] = {
+            "transformation_type": self.config.transformation_type.value,
+            "target": self.get_target_table_name(),
+        }
+        base_payload.update(payload)
+        emit_tracker_event(
+            tracker=self._tracker,
+            component=self.__class__.__name__,
+            event=event,
+            payload=base_payload,
+        )
 
     @abstractmethod
     def transform(self, **kwargs: Any) -> TransformationResult:
@@ -198,6 +254,18 @@ class BaseTransformation(ABC):
             f"{self.__class__.__name__} must implement validate()"
         )
 
+    def pre_transform(self) -> None:
+        """Execute hook before the transformation begins."""
+        pass
+
+    def post_transform(self, result: TransformationResult) -> None:
+        """Execute hook after a successful transformation."""
+        pass
+
+    def on_transform_error(self, error: Exception) -> None:
+        """Handle transformation failure in hook."""
+        pass
+
     def get_source_table_name(self) -> str:
         """Get fully qualified source table name.
 
@@ -221,3 +289,40 @@ class BaseTransformation(ABC):
             f"{self.config.target_schema}."
             f"{self.config.target_table}"
         )
+
+    def execute_transformation(self, **kwargs: Any) -> TransformationResult:
+        """Execute the transformation with lifecycle hooks and tracking."""
+        self._emit_event(
+            event="transformation_start",
+            payload={"timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+        self.pre_transform()
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            result = self.transform(**kwargs)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            result.metrics.setdefault("duration_seconds", duration)
+            result.start_time = result.start_time or start_time
+            result.end_time = result.end_time or datetime.now(timezone.utc)
+            self.post_transform(result)
+            self._emit_event(
+                event="transformation_end",
+                payload={
+                    "status": result.status,
+                    "metrics": result.metrics,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return result
+        except Exception as exc:
+            self.logger.error("Transformation failed", exc_info=True)
+            self.on_transform_error(exc)
+            self._emit_event(
+                event="transformation_error",
+                payload={
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise
