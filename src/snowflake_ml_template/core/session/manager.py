@@ -9,7 +9,7 @@ Classes:
 """
 
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from snowflake.snowpark import Session
 
@@ -177,7 +177,7 @@ class SessionManager:
                 f"Schema: {config.get('schema', 'N/A')}"
             )
 
-            return session
+            return cast(Session, session)
 
         except Exception as e:
             instance._logger.error(

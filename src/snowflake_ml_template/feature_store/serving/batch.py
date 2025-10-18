@@ -8,7 +8,7 @@ were available, not when they were created. This ensures that training
 data only uses information that would have been available at prediction time.
 """
 
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from snowflake.snowpark import DataFrame, Session
 from snowflake.snowpark.functions import col
@@ -235,7 +235,7 @@ class BatchFeatureServer:
             .drop("_row_num")
         )
 
-        return result
+        return cast(DataFrame, result)  # Explicitly cast to DataFrame type
 
     def _simple_join(
         self,
@@ -266,7 +266,9 @@ class BatchFeatureServer:
             spine_df[col_name] == feature_df[col_name] for col_name in entity_cols
         ]
 
-        return spine_df.join(feature_df, join_condition, join_type="left")
+        return cast(
+            DataFrame, spine_df.join(feature_df, join_condition, join_type="left")
+        )
 
     def generate_training_dataset(
         self,
@@ -326,4 +328,4 @@ class BatchFeatureServer:
             },
         )
 
-        return result
+        return cast(DataFrame, result)
