@@ -1,5 +1,5 @@
-"""Utility helpers: safe session factory and helpers for query tagging and auditing."""
+"""Utility helpers for logging and common operations."""
 
-from .session import create_session_from_env, set_query_tag
+from snowflake_ml_template.utils.logging import get_logger
 
-__all__ = ["create_session_from_env", "set_query_tag"]
+__all__ = ["get_logger"]

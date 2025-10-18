@@ -217,7 +217,7 @@ snowsql.cnf
 *.parquet
 *.xlsx
 data/
-datasets/
+#datasets/
 
 # Model artifacts and ML runs
 models/
@@ -258,4 +258,7 @@ private_keys/
 config/local/
 .env.local
 .env.*.local
+#*.ipynb
+*.windsurf
+*.csv
 *.ipynb

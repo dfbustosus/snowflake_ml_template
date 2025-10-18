@@ -1,5 +1,16 @@
-"""Pipeline orchestration helpers for Snowflake Tasks and Streams."""
+"""ML Pipelines for Snowflake MLOps.
 
-from .tasks import render_check_new_data_task, render_train_task
+This module contains production-ready ML pipelines built on the framework.
+"""
 
-__all__ = ["render_check_new_data_task", "render_train_task"]
+from snowflake_ml_template.pipelines._base.template import PipelineTemplate
+from snowflake_ml_template.pipelines.fraud_detection import FraudDetectionPipeline
+from snowflake_ml_template.pipelines.vehicle_insurance_fraud import (
+    VehicleInsuranceFraudPipeline,
+)
+
+__all__ = [
+    "PipelineTemplate",
+    "FraudDetectionPipeline",
+    "VehicleInsuranceFraudPipeline",
+]
