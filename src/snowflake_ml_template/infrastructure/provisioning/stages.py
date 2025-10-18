@@ -7,30 +7,24 @@ Classes:
     StageProvisioner: Create and manage stages
 """
 
-from typing import Optional
+from typing import Dict, Optional
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.exceptions import ConfigurationError
-from snowflake_ml_template.utils.logging import get_logger
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
+from snowflake_ml_template.infrastructure.provisioning.base import BaseProvisioner
 
 
-class StageProvisioner:
+class StageProvisioner(BaseProvisioner):
     """Provision and manage Snowflake stages."""
 
-    def __init__(self, session: Session) -> None:
-        """Initialize the StageProvisioner with a Snowflake session.
-
-        Args:
-            session: An active Snowflake session for executing stage operations.
-
-        Raises:
-            ValueError: If the provided session is None.
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-        self.session = session
-        self.logger = get_logger(__name__)
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize `StageProvisioner` with a Snowflake session."""
+        super().__init__(session=session, tracker=tracker)
 
     def create_stage(
         self,
@@ -41,49 +35,64 @@ class StageProvisioner:
         storage_integration: Optional[str] = None,
         file_format: Optional[str] = None,
         comment: Optional[str] = None,
+        *,
+        directory: Optional[str] = None,
+        encryption: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
     ) -> bool:
         """Create a stage if it doesn't exist."""
         if not name or not database or not schema:
             raise ValueError("Name, database, and schema cannot be empty")
 
-        full_name = f"{database}.{schema}.{name}"
-        self.logger.info(f"Creating stage: {full_name}")
+        qualified_name = self.format_qualified_identifier(database, schema, name)
+        self.logger.info(
+            "Creating stage",
+            extra={"stage": qualified_name, "has_url": bool(url)},
+        )
 
-        try:
-            sql_parts = [f"CREATE STAGE IF NOT EXISTS {full_name}"]
+        clauses = [f"CREATE STAGE IF NOT EXISTS {qualified_name}"]
 
-            if url:
-                sql_parts.append(f"URL = '{url}'")
-                if storage_integration:
-                    sql_parts.append(f"STORAGE_INTEGRATION = {storage_integration}")
+        if url:
+            literal_url = self.quote_literal(url)
+            clauses.append(f"URL = {literal_url}")
+            if storage_integration:
+                clauses.append(
+                    f"STORAGE_INTEGRATION = {self.quote_identifier(storage_integration)}"
+                )
 
-            if file_format:
-                sql_parts.append(f"FILE_FORMAT = {file_format}")
+        if file_format:
+            clauses.append(f"FILE_FORMAT = {self.quote_identifier(file_format)}")
 
-            if comment:
-                sql_parts.append(f"COMMENT = '{comment}'")
+        if directory:
+            clauses.append(f"DIRECTORY = ( ENABLE = {directory} )")
 
-            sql = " ".join(sql_parts)
-            self.session.sql(sql).collect()
+        if encryption:
+            clauses.append(f"ENCRYPTION = ( TYPE = {encryption} )")
 
-            self.logger.info(f"Stage created: {full_name}")
-            return True
+        if comment:
+            clauses.append(f"COMMENT = {self.quote_literal(comment)}")
 
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create stage: {full_name}", extra={"error": str(e)}
+        sql = " ".join(clauses)
+
+        rollback_statements = [f"DROP STAGE IF EXISTS {qualified_name}"]
+        with self.transactional(rollback=rollback_statements):
+            self._execute_sql(
+                sql,
+                context={"stage": qualified_name},
+                emit_event="stage_created",
             )
-            raise ConfigurationError(
-                f"Failed to create stage: {full_name}",
-                context={"stage": full_name},
-                original_error=e,
-            )
+
+            if tags:
+                self._apply_tags("STAGE", qualified_name, tags)
+
+        return True
 
     def stage_exists(self, name: str, database: str, schema: str) -> bool:
         """Check if a stage exists."""
         try:
             result = self.session.sql(
-                f"SHOW STAGES LIKE '{name}' IN SCHEMA {database}.{schema}"
+                f"SHOW STAGES LIKE {self.quote_literal(name)} "
+                f"IN SCHEMA {self.format_qualified_identifier(database, schema)}"
             ).collect()
             return len(result) > 0
         except Exception:

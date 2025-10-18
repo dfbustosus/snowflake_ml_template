@@ -42,7 +42,7 @@ def test_create_stage_minimal_success():
     prov = StageProvisioner(sess)
     ok = prov.create_stage(name="STG", database="DB", schema="SCH")
     assert ok is True
-    assert any("CREATE STAGE IF NOT EXISTS DB.SCH.STG" in q for q in sess.queries)
+    assert any('CREATE STAGE IF NOT EXISTS "DB"."SCH"."STG"' in q for q in sess.queries)
 
 
 def test_create_stage_with_url_integration_file_format_and_comment():
@@ -65,8 +65,8 @@ def test_create_stage_with_url_integration_file_format_and_comment():
     assert ok is True
     q = " ".join(sess.queries)
     assert "URL = 's3://bucket/path'" in q
-    assert "STORAGE_INTEGRATION = INTG" in q
-    assert "FILE_FORMAT = FMT_JSON" in q
+    assert 'STORAGE_INTEGRATION = "INTG"' in q
+    assert 'FILE_FORMAT = "FMT_JSON"' in q
     assert "COMMENT = 'my stage'" in q
 
 

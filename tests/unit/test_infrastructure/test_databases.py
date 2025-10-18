@@ -83,7 +83,7 @@ def test_create_database_variants_and_failure():
     # failure raises ConfigurationError
     sess_fail = StubSession(
         [
-            ("CREATE DATABASE IF NOT EXISTS BAD", lambda: [], True),
+            ('CREATE DATABASE IF NOT EXISTS "BAD"', lambda: [], True),
         ]
     )
     prov_fail = DatabaseProvisioner(sess_fail)
@@ -120,3 +120,22 @@ def test_database_exists_exception_and_drop_error():
     assert prov.database_exists("X") is False
     with pytest.raises(ConfigurationError):
         prov.drop_database("X")
+
+
+def test_create_database_with_tags_and_replication():
+    """Ensure tagging and replication statements are executed."""
+    sess = StubSession(
+        [
+            ("CREATE DATABASE IF NOT EXISTS", lambda: [], False),
+            ("ALTER DATABASE", lambda: [], False),
+            ("ENABLE REPLICATION", lambda: [], False),
+        ]
+    )
+    prov = DatabaseProvisioner(sess)
+    prov.create_database(
+        name="ANALYTICS_DB",
+        tags={"ml.tag": "analytics"},
+        replication_targets=["ORG.ACCOUNT1", "ORG.ACCOUNT2"],
+    )
+    assert any('ALTER DATABASE "ANALYTICS_DB" SET TAG' in q for q in sess.queries)
+    assert any("ENABLE REPLICATION" in q for q in sess.queries)

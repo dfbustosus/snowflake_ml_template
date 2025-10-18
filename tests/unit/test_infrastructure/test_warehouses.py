@@ -68,6 +68,11 @@ def test_create_warehouse_success_and_sql_composition():
         min_cluster_count=2,
         max_cluster_count=4,
         comment="training",
+        statement_timeout_in_seconds=120,
+        tags={"ml.stage": "train"},
+        resource_monitor="RM",
+        scaling_policy="ECONOMY",
+        grants_to_roles=["ML_ENGINEER"],
     )
     assert ok is True
     q = " ".join(sess.queries)
@@ -78,6 +83,14 @@ def test_create_warehouse_success_and_sql_composition():
     assert "MIN_CLUSTER_COUNT = 2" in q
     assert "MAX_CLUSTER_COUNT = 4" in q
     assert "COMMENT = 'training'" in q
+    assert "STATEMENT_TIMEOUT_IN_SECONDS = 120" in q
+    assert "SCALING_POLICY = 'ECONOMY'" in q
+    assert 'RESOURCE_MONITOR = "RM"' in q
+    assert any('SET TAG "ml"."stage" = ' in query for query in sess.queries)
+    assert any(
+        'GRANT OWNERSHIP ON WAREHOUSE "TRAIN_WH" TO ROLE "ML_ENGINEER"' in query
+        for query in sess.queries
+    )
 
 
 def test_create_warehouse_failure_raises_configuration_error():

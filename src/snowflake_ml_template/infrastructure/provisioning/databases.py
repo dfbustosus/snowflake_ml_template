@@ -7,15 +7,15 @@ Classes:
     DatabaseProvisioner: Create and manage databases
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.exceptions import ConfigurationError
-from snowflake_ml_template.utils.logging import get_logger
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
+from snowflake_ml_template.infrastructure.provisioning.base import BaseProvisioner
 
 
-class DatabaseProvisioner:
+class DatabaseProvisioner(BaseProvisioner):
     """Provision and manage Snowflake databases.
 
     This class handles the creation and management of Snowflake databases
@@ -26,44 +26,15 @@ class DatabaseProvisioner:
 
     All operations are idempotent - running them multiple times produces
     the same result.
-
-    Attributes:
-        session: Snowflake session
-        logger: Structured logger
-
-    Example:
-        >>> provisioner = DatabaseProvisioner(session)
-        >>>
-        >>> # Create all three environment databases
-        >>> provisioner.create_environment_databases()
-        >>>
-        >>> # Create a custom database
-        >>> provisioner.create_database(
-        ...     name="CUSTOM_DB",
-        ...     comment="Custom database for experiments"
-        ... )
-        >>>
-        >>> # Clone production to test
-        >>> provisioner.clone_database(
-        ...     source="ML_PROD_DB",
-        ...     target="ML_TEST_DB"
-        ... )
     """
 
-    def __init__(self, session: Session) -> None:
-        """Initialize the database provisioner.
-
-        Args:
-            session: Active Snowflake session
-
-        Raises:
-            ValueError: If session is None
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-
-        self.session = session
-        self.logger = get_logger(__name__)
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize the provisioner with a Snowflake session."""
+        super().__init__(session=session, tracker=tracker)
 
     def create_environment_databases(
         self,
@@ -71,6 +42,12 @@ class DatabaseProvisioner:
         test_db: str = "ML_TEST_DB",
         prod_db: str = "ML_PROD_DB",
         clone_test_from_prod: bool = False,
+        *,
+        tags: Optional[Dict[str, str]] = None,
+        data_retention_time_in_days: int = 1,
+        max_data_extension_time_in_days: Optional[int] = None,
+        default_ddl_collation: Optional[str] = None,
+        replication_targets: Optional[List[str]] = None,
     ) -> Dict[str, bool]:
         """Create the three-tier environment databases.
 
@@ -105,12 +82,24 @@ class DatabaseProvisioner:
 
         # Create DEV database
         results[dev_db] = self.create_database(
-            name=dev_db, comment="Development environment for ML workloads"
+            name=dev_db,
+            comment="Development environment for ML workloads",
+            data_retention_time_in_days=data_retention_time_in_days,
+            max_data_extension_time_in_days=max_data_extension_time_in_days,
+            default_ddl_collation=default_ddl_collation,
+            tags=tags,
+            replication_targets=replication_targets,
         )
 
         # Create PROD database
         results[prod_db] = self.create_database(
-            name=prod_db, comment="Production environment for ML workloads"
+            name=prod_db,
+            comment="Production environment for ML workloads",
+            data_retention_time_in_days=data_retention_time_in_days,
+            max_data_extension_time_in_days=max_data_extension_time_in_days,
+            default_ddl_collation=default_ddl_collation,
+            tags=tags,
+            replication_targets=replication_targets,
         )
 
         # Create TEST database (clone or new)
@@ -119,10 +108,18 @@ class DatabaseProvisioner:
                 source=prod_db,
                 target=test_db,
                 comment="Test environment (cloned from production)",
+                tags=tags,
+                replication_targets=replication_targets,
             )
         else:
             results[test_db] = self.create_database(
-                name=test_db, comment="Test environment for ML workloads"
+                name=test_db,
+                comment="Test environment for ML workloads",
+                data_retention_time_in_days=data_retention_time_in_days,
+                max_data_extension_time_in_days=max_data_extension_time_in_days,
+                default_ddl_collation=default_ddl_collation,
+                tags=tags,
+                replication_targets=replication_targets,
             )
 
         self.logger.info(
@@ -137,6 +134,11 @@ class DatabaseProvisioner:
         comment: Optional[str] = None,
         data_retention_time_in_days: int = 1,
         transient: bool = False,
+        *,
+        max_data_extension_time_in_days: Optional[int] = None,
+        default_ddl_collation: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
+        replication_targets: Optional[List[str]] = None,
     ) -> bool:
         """Create a database if it doesn't exist.
 
@@ -165,52 +167,49 @@ class DatabaseProvisioner:
         if not name:
             raise ValueError("Database name cannot be empty")
 
-        self.logger.info(f"Creating database: {name}")
+        database_identifier = self.quote_identifier(name)
+        self.logger.info("Creating database", extra={"database": name})
 
-        try:
-            # Build CREATE DATABASE statement
-            sql_parts = ["CREATE"]
+        clauses = ["CREATE"]
+        if transient:
+            clauses.append("TRANSIENT")
+        clauses.append(f"DATABASE IF NOT EXISTS {database_identifier}")
 
-            if transient:
-                sql_parts.append("TRANSIENT")
+        options = {
+            "DATA_RETENTION_TIME_IN_DAYS": data_retention_time_in_days,
+            "MAX_DATA_EXTENSION_TIME_IN_DAYS": max_data_extension_time_in_days,
+            "DEFAULT_DDL_COLLATION": default_ddl_collation,
+        }
+        set_clause = self._format_set_options(options)
+        if set_clause:
+            clauses.append(set_clause)
+        if comment:
+            clauses.append(f"COMMENT = {self.quote_literal(comment)}")
 
-            sql_parts.append(f"DATABASE IF NOT EXISTS {name}")
+        sql = " ".join(clauses)
 
-            if data_retention_time_in_days:
-                sql_parts.append(
-                    f"DATA_RETENTION_TIME_IN_DAYS = {data_retention_time_in_days}"
-                )
+        self._execute_sql(
+            sql,
+            context={"database": name, "transient": transient},
+            emit_event="database_created",
+        )
 
-            if comment:
-                sql_parts.append(f"COMMENT = '{comment}'")
+        if tags:
+            self._apply_tags("DATABASE", database_identifier, tags)
 
-            sql = " ".join(sql_parts)
+        if replication_targets:
+            self._enable_replication(database_identifier, replication_targets)
 
-            # Execute
-            self.session.sql(sql).collect()
-
-            self.logger.info(
-                f"Database created successfully: {name}",
-                extra={
-                    "transient": transient,
-                    "retention_days": data_retention_time_in_days,
-                },
-            )
-
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create database: {name}", extra={"error": str(e)}
-            )
-            raise ConfigurationError(
-                f"Failed to create database: {name}",
-                context={"database": name},
-                original_error=e,
-            )
+        return True
 
     def clone_database(
-        self, source: str, target: str, comment: Optional[str] = None
+        self,
+        source: str,
+        target: str,
+        comment: Optional[str] = None,
+        *,
+        tags: Optional[Dict[str, str]] = None,
+        replication_targets: Optional[List[str]] = None,
     ) -> bool:
         """Clone a database using zero-copy cloning.
 
@@ -237,32 +236,31 @@ class DatabaseProvisioner:
         if not source or not target:
             raise ValueError("Source and target database names cannot be empty")
 
-        self.logger.info(f"Cloning database: {source} -> {target}")
+        self.logger.info("Cloning database", extra={"source": source, "target": target})
 
-        try:
-            # Build CLONE statement
-            sql = f"CREATE OR REPLACE DATABASE {target} CLONE {source}"
+        source_identifier = self.quote_identifier(source)
+        target_identifier = self.quote_identifier(target)
 
-            if comment:
-                sql += f" COMMENT = '{comment}'"
+        sql = (
+            f"CREATE OR REPLACE DATABASE {target_identifier} CLONE {source_identifier}"
+        )
+        if comment:
+            sql += f" COMMENT = {self.quote_literal(comment)}"
 
-            # Execute
-            self.session.sql(sql).collect()
-
-            self.logger.info(f"Database cloned successfully: {source} -> {target}")
-
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to clone database: {source} -> {target}",
-                extra={"error": str(e)},
-            )
-            raise ConfigurationError(
-                f"Failed to clone database: {source} -> {target}",
+        with self.transactional():
+            self._execute_sql(
+                sql,
                 context={"source": source, "target": target},
-                original_error=e,
+                emit_event="database_cloned",
             )
+
+            if tags:
+                self._apply_tags("DATABASE", target_identifier, tags)
+
+            if replication_targets:
+                self._enable_replication(target_identifier, replication_targets)
+
+        return True
 
     def drop_database(self, name: str, if_exists: bool = True) -> bool:
         """Drop a database.
@@ -280,24 +278,18 @@ class DatabaseProvisioner:
         if not name:
             raise ValueError("Database name cannot be empty")
 
-        self.logger.warning(f"Dropping database: {name}")
+        database_identifier = self.quote_identifier(name)
+        self.logger.warning("Dropping database", extra={"database": name})
 
-        try:
-            sql = f"DROP DATABASE {'IF EXISTS' if if_exists else ''} {name}"
-            self.session.sql(sql).collect()
+        clause = "IF EXISTS " if if_exists else ""
+        sql = f"DROP DATABASE {clause}{database_identifier}".strip()
 
-            self.logger.info(f"Database dropped: {name}")
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to drop database: {name}", extra={"error": str(e)}
-            )
-            raise ConfigurationError(
-                f"Failed to drop database: {name}",
-                context={"database": name},
-                original_error=e,
-            )
+        self._execute_sql(
+            sql,
+            context={"database": name},
+            emit_event="database_dropped",
+        )
+        return True
 
     def database_exists(self, name: str) -> bool:
         """Check if a database exists.
@@ -309,7 +301,8 @@ class DatabaseProvisioner:
             True if database exists, False otherwise
         """
         try:
-            result = self.session.sql(f"SHOW DATABASES LIKE '{name}'").collect()
+            literal = self.quote_literal(name)
+            result = self.session.sql(f"SHOW DATABASES LIKE {literal}").collect()
             return len(result) > 0
         except Exception:
             return False
@@ -324,5 +317,23 @@ class DatabaseProvisioner:
             result = self.session.sql("SHOW DATABASES").collect()
             return [row["name"] for row in result]
         except Exception as e:
-            self.logger.error(f"Failed to list databases: {e}")
+            self.logger.error("Failed to list databases", extra={"error": str(e)})
             return []
+
+    def _enable_replication(
+        self, database_identifier: str, targets: Iterable[str]
+    ) -> None:
+        formatted_targets = []
+        for target in targets:
+            literal = self.quote_literal(target)
+            if literal is None:
+                continue
+            formatted_targets.append(literal)
+        if not formatted_targets:
+            return
+        target_clause = ", ".join(formatted_targets)
+        sql = (
+            f"ALTER DATABASE {database_identifier} "
+            f"ENABLE REPLICATION TO ACCOUNTS {target_clause}"
+        )
+        self._execute_sql(sql, context={"database": database_identifier})

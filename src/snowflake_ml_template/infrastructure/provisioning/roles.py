@@ -7,15 +7,15 @@ Classes:
     RoleProvisioner: Create and manage RBAC roles
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from snowflake.snowpark import Session
 
-from snowflake_ml_template.core.exceptions import ConfigurationError
-from snowflake_ml_template.utils.logging import get_logger
+from snowflake_ml_template.core.base.tracking import ExecutionEventTracker
+from snowflake_ml_template.infrastructure.provisioning.base import BaseProvisioner
 
 
-class RoleProvisioner:
+class RoleProvisioner(BaseProvisioner):
     """Provision and manage Snowflake RBAC roles.
 
     This class handles the creation and management of Snowflake roles
@@ -50,20 +50,13 @@ class RoleProvisioner:
         "ML_INFERENCE_SERVICE_ROLE": "Service role for model inference",
     }
 
-    def __init__(self, session: Session) -> None:
-        """Initialize the role provisioner.
-
-        Args:
-            session: Active Snowflake session
-
-        Raises:
-            ValueError: If session is None
-        """
-        if session is None:
-            raise ValueError("Session cannot be None")
-
-        self.session = session
-        self.logger = get_logger(__name__)
+    def __init__(
+        self,
+        session: Session,
+        tracker: Optional[ExecutionEventTracker] = None,
+    ) -> None:
+        """Initialize the RoleProvisioner."""
+        super().__init__(session=session, tracker=tracker)
 
     def create_mlops_roles(self) -> Dict[str, bool]:
         """Create all standard MLOps roles.
@@ -113,26 +106,19 @@ class RoleProvisioner:
         if not name:
             raise ValueError("Role name cannot be empty")
 
-        self.logger.info(f"Creating role: {name}")
+        self.logger.info("Creating role", extra={"role": name})
 
-        try:
-            # Create role
-            sql = f"CREATE ROLE IF NOT EXISTS {name}"
-            if comment:
-                sql += f" COMMENT = '{comment}'"
+        role_identifier = self.quote_identifier(name)
+        sql = f"CREATE ROLE IF NOT EXISTS {role_identifier}"
+        if comment:
+            sql += f" COMMENT = {self.quote_literal(comment)}"
 
-            self.session.sql(sql).collect()
-
-            self.logger.info(f"Role created successfully: {name}")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to create role: {name}", extra={"error": str(e)})
-            raise ConfigurationError(
-                f"Failed to create role: {name}",
-                context={"role": name},
-                original_error=e,
-            )
+        self._execute_sql(
+            sql,
+            context={"role": name},
+            emit_event="role_created",
+        )
+        return True
 
     def grant_role_to_user(self, role: str, user: str) -> bool:
         """Grant a role to a user.
@@ -156,26 +142,18 @@ class RoleProvisioner:
         if not role or not user:
             raise ValueError("Role and user cannot be empty")
 
-        self.logger.info(f"Granting role {role} to user {user}")
+        self.logger.info("Granting role to user", extra={"role": role, "user": user})
 
-        try:
-            sql = f"GRANT ROLE {role} TO USER {user}"
-            self.session.sql(sql).collect()
-
-            self.logger.info(
-                "Role granted successfully", extra={"role": role, "user": user}
-            )
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to grant role {role} to user {user}", extra={"error": str(e)}
-            )
-            raise ConfigurationError(
-                f"Failed to grant role {role} to user {user}",
-                context={"role": role, "user": user},
-                original_error=e,
-            )
+        sql = (
+            f"GRANT ROLE {self.quote_identifier(role)} "
+            f"TO USER {self.quote_identifier(user)}"
+        )
+        self._execute_sql(
+            sql,
+            context={"role": role, "user": user},
+            emit_event="role_granted_to_user",
+        )
+        return True
 
     def grant_role_to_role(self, child_role: str, parent_role: str) -> bool:
         """Grant a role to another role (role hierarchy).
@@ -193,28 +171,21 @@ class RoleProvisioner:
         if not child_role or not parent_role:
             raise ValueError("Child and parent roles cannot be empty")
 
-        self.logger.info(f"Granting role {child_role} to role {parent_role}")
+        self.logger.info(
+            "Granting role to role",
+            extra={"child_role": child_role, "parent_role": parent_role},
+        )
 
-        try:
-            sql = f"GRANT ROLE {child_role} TO ROLE {parent_role}"
-            self.session.sql(sql).collect()
-
-            self.logger.info(
-                "Role granted successfully",
-                extra={"child_role": child_role, "parent_role": parent_role},
-            )
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"Failed to grant role {child_role} to role {parent_role}",
-                extra={"error": str(e)},
-            )
-            raise ConfigurationError(
-                f"Failed to grant role {child_role} to role {parent_role}",
-                context={"child_role": child_role, "parent_role": parent_role},
-                original_error=e,
-            )
+        sql = (
+            f"GRANT ROLE {self.quote_identifier(child_role)} "
+            f"TO ROLE {self.quote_identifier(parent_role)}"
+        )
+        self._execute_sql(
+            sql,
+            context={"child_role": child_role, "parent_role": parent_role},
+            emit_event="role_granted_to_role",
+        )
+        return True
 
     def grant_database_privileges(
         self, role: str, database: str, privileges: List[str]
@@ -243,31 +214,23 @@ class RoleProvisioner:
             raise ValueError("Role, database, and privileges cannot be empty")
 
         self.logger.info(
-            f"Granting database privileges to role {role}",
-            extra={"database": database, "privileges": privileges},
+            "Granting database privileges",
+            extra={"role": role, "database": database, "privileges": privileges},
         )
 
-        try:
-            for privilege in privileges:
-                sql = f"GRANT {privilege} ON DATABASE {database} TO ROLE {role}"
-                self.session.sql(sql).collect()
-
-            self.logger.info(
-                "Database privileges granted successfully",
-                extra={"role": role, "database": database, "privileges": privileges},
+        database_identifier = self.quote_identifier(database)
+        role_identifier = self.quote_identifier(role)
+        for privilege in privileges:
+            sql = (
+                f"GRANT {privilege} ON DATABASE {database_identifier} "
+                f"TO ROLE {role_identifier}"
             )
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                "Failed to grant database privileges",
-                extra={"role": role, "database": database, "error": str(e)},
+            self._execute_sql(
+                sql,
+                context={"role": role, "database": database, "privilege": privilege},
+                emit_event="database_privilege_granted",
             )
-            raise ConfigurationError(
-                f"Failed to grant database privileges to role {role}",
-                context={"role": role, "database": database, "privileges": privileges},
-                original_error=e,
-            )
+        return True
 
     def grant_schema_privileges(
         self, role: str, database: str, schema: str, privileges: List[str]
@@ -291,31 +254,23 @@ class RoleProvisioner:
 
         full_schema = f"{database}.{schema}"
         self.logger.info(
-            f"Granting schema privileges to role {role}",
-            extra={"schema": full_schema, "privileges": privileges},
+            "Granting schema privileges",
+            extra={"role": role, "schema": full_schema, "privileges": privileges},
         )
 
-        try:
-            for privilege in privileges:
-                sql = f"GRANT {privilege} ON SCHEMA {full_schema} TO ROLE {role}"
-                self.session.sql(sql).collect()
-
-            self.logger.info(
-                "Schema privileges granted successfully",
-                extra={"role": role, "schema": full_schema, "privileges": privileges},
+        role_identifier = self.quote_identifier(role)
+        schema_identifier = self.format_qualified_identifier(database, schema)
+        for privilege in privileges:
+            sql = (
+                f"GRANT {privilege} ON SCHEMA {schema_identifier} "
+                f"TO ROLE {role_identifier}"
             )
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                "Failed to grant schema privileges",
-                extra={"role": role, "schema": full_schema, "error": str(e)},
+            self._execute_sql(
+                sql,
+                context={"role": role, "schema": full_schema, "privilege": privilege},
+                emit_event="schema_privilege_granted",
             )
-            raise ConfigurationError(
-                f"Failed to grant schema privileges to role {role}",
-                context={"role": role, "schema": full_schema, "privileges": privileges},
-                original_error=e,
-            )
+        return True
 
     def grant_warehouse_privileges(
         self, role: str, warehouse: str, privileges: List[str]
@@ -337,35 +292,110 @@ class RoleProvisioner:
             raise ValueError("Role, warehouse, and privileges cannot be empty")
 
         self.logger.info(
-            f"Granting warehouse privileges to role {role}",
-            extra={"warehouse": warehouse, "privileges": privileges},
+            "Granting warehouse privileges",
+            extra={"role": role, "warehouse": warehouse, "privileges": privileges},
         )
 
-        try:
-            for privilege in privileges:
-                sql = f"GRANT {privilege} ON WAREHOUSE {warehouse} TO ROLE {role}"
-                self.session.sql(sql).collect()
+        role_identifier = self.quote_identifier(role)
+        warehouse_identifier = self.quote_identifier(warehouse)
+        for privilege in privileges:
+            sql = (
+                f"GRANT {privilege} ON WAREHOUSE {warehouse_identifier} "
+                f"TO ROLE {role_identifier}"
+            )
+            self._execute_sql(
+                sql,
+                context={"role": role, "warehouse": warehouse, "privilege": privilege},
+                emit_event="warehouse_privilege_granted",
+            )
+        return True
 
-            self.logger.info(
-                "Warehouse privileges granted successfully",
-                extra={"role": role, "warehouse": warehouse, "privileges": privileges},
-            )
-            return True
+    def grant_future_schema_privileges(
+        self,
+        role: str,
+        database: str,
+        privileges: Iterable[str],
+    ) -> bool:
+        """Grant future schema privileges to a role.
 
-        except Exception as e:
-            self.logger.error(
-                "Failed to grant warehouse privileges",
-                extra={"role": role, "warehouse": warehouse, "error": str(e)},
+        Args:
+            role: Role name
+            database: Database name
+            privileges: List of privileges (e.g., ['USAGE', 'CREATE SCHEMA'])
+
+        Returns:
+            True if grant was successful
+
+        Raises:
+            ConfigurationError: If grant fails
+        """
+        if not role or not database:
+            raise ValueError("Role and database cannot be empty")
+        database_identifier = self.quote_identifier(database)
+        role_identifier = self.quote_identifier(role)
+        for privilege in privileges:
+            sql = (
+                f"GRANT {privilege} ON FUTURE SCHEMAS IN DATABASE {database_identifier} "
+                f"TO ROLE {role_identifier}"
             )
-            raise ConfigurationError(
-                f"Failed to grant warehouse privileges to role {role}",
-                context={
-                    "role": role,
-                    "warehouse": warehouse,
-                    "privileges": privileges,
-                },
-                original_error=e,
+            self._execute_sql(
+                sql,
+                context={"role": role, "database": database, "privilege": privilege},
+                emit_event="future_schema_privilege_granted",
             )
+        return True
+
+    def revoke_role_from_user(self, role: str, user: str) -> bool:
+        """Revoke a role from a user.
+
+        Args:
+            role: Role name
+            user: User name or email
+
+        Returns:
+            True if revoke was successful
+
+        Raises:
+            ConfigurationError: If revoke fails
+        """
+        if not role or not user:
+            raise ValueError("Role and user cannot be empty")
+        sql = (
+            f"REVOKE ROLE {self.quote_identifier(role)} "
+            f"FROM USER {self.quote_identifier(user)}"
+        )
+        self._execute_sql(
+            sql,
+            context={"role": role, "user": user},
+            emit_event="role_revoked_from_user",
+        )
+        return True
+
+    def revoke_role_from_role(self, child_role: str, parent_role: str) -> bool:
+        """Revoke a role from another role (role hierarchy).
+
+        Args:
+            child_role: Child role name
+            parent_role: Parent role name
+
+        Returns:
+            True if revoke was successful
+
+        Raises:
+            ConfigurationError: If revoke fails
+        """
+        if not child_role or not parent_role:
+            raise ValueError("Child and parent roles cannot be empty")
+        sql = (
+            f"REVOKE ROLE {self.quote_identifier(child_role)} "
+            f"FROM ROLE {self.quote_identifier(parent_role)}"
+        )
+        self._execute_sql(
+            sql,
+            context={"child_role": child_role, "parent_role": parent_role},
+            emit_event="role_revoked_from_role",
+        )
+        return True
 
     def role_exists(self, name: str) -> bool:
         """Check if a role exists.
@@ -377,7 +407,9 @@ class RoleProvisioner:
             True if role exists, False otherwise
         """
         try:
-            result = self.session.sql(f"SHOW ROLES LIKE '{name}'").collect()
+            result = self.session.sql(
+                f"SHOW ROLES LIKE {self.quote_literal(name)}"
+            ).collect()
             return len(result) > 0
         except Exception:
             return False
@@ -392,5 +424,5 @@ class RoleProvisioner:
             result = self.session.sql("SHOW ROLES").collect()
             return [row["name"] for row in result]
         except Exception as e:
-            self.logger.error(f"Failed to list roles: {e}")
+            self.logger.error("Failed to list roles", extra={"error": str(e)})
             return []
