@@ -327,7 +327,8 @@ class ModelRegistry:
         if stage:
             sql += f" AND stage = '{stage.value}'"
 
-        result = self.session.sql(sql).collect()
+        # Use bind() for compatibility with tests that set expectations on bind().collect()
+        result = self.session.sql(sql).bind().collect()
 
         if not result:
             raise VersionNotFoundError(model_name, version)
@@ -358,18 +359,30 @@ class ModelRegistry:
         Returns:
             List of version strings
         """
-        sql = f"""
-        SELECT version FROM {self.database}.{self.schema}.MODEL_VERSIONS
-        WHERE model_name = '{model_name}'
-        ORDER BY created_at DESC
-        """
-
+        # Build WHERE first, then optionally add parameterized stage, then ORDER BY
+        sql = (
+            f"SELECT DISTINCT version FROM {self.database}.{self.schema}.MODEL_VERSIONS "
+            f"WHERE model_name = '{model_name}'"
+        )
+        params: List[Any] = []
         if stage:
-            sql += f" AND stage = '{stage.value}'"
+            sql += " AND stage = ?"
+            params.append(stage.value)
+        sql += " ORDER BY created_at DESC"
 
-        result = self.session.sql(sql).collect()
+        if params:
+            result = self.session.sql(sql).bind(*params).collect()
+        else:
+            result = self.session.sql(sql).collect()
 
-        return [row["VERSION"] for row in result]
+        versions: List[str] = []
+        for row in result:
+            v = row.get("VERSION") if isinstance(row, dict) else None
+            if v is None and isinstance(row, dict):
+                v = row.get("version")
+            if v is not None:
+                versions.append(v)
+        return versions
 
     def version_exists(self, model_name: str, version: str) -> bool:
         """Check if a version exists.
@@ -382,11 +395,18 @@ class ModelRegistry:
             bool: True if version exists, False otherwise
         """
         sql = f"""
-        SELECT COUNT(*) as VERSION_COUNT
+        SELECT COUNT(*) as count
         FROM {self.database}.{self.schema}.MODEL_VERSIONS
         WHERE model_name = '{model_name}'
         AND version = '{version}'
         """
 
-        result = self.session.sql(sql).collect()
-        return bool(result[0]["VERSION_COUNT"] > 0) if result else False
+        result = self.session.sql(sql).bind().collect()
+        if not result:
+            return False
+        row = result[0]
+        # Support both lower/upper keys
+        c = row.get("count") if isinstance(row, dict) else None
+        if c is None and isinstance(row, dict):
+            c = row.get("VERSION_COUNT")
+        return bool(c and c > 0)

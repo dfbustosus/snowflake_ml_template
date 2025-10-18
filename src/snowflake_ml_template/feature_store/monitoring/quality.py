@@ -85,6 +85,20 @@ class FeatureQualityMonitor:
         self.session = session
         self.logger = get_logger(__name__)
 
+    def check_nulls(self, df: DataFrame, feature_col: str) -> int:
+        """Check number of nulls in a feature column.
+
+        Args:
+            df: DataFrame containing the feature column
+            feature_col: Column name to check
+
+        Returns:
+            int: Count of null values in the column
+        """
+        # Simple and compatible approach: filter nulls and count
+        count_val = df.filter(col(feature_col).isNull()).count()
+        return int(count_val)
+
     def calculate_quality_metrics(
         self, df: DataFrame, feature_col: str
     ) -> QualityMetrics:

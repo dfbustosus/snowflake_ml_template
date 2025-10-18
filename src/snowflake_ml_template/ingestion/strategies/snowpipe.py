@@ -35,6 +35,10 @@ class SnowpipeStrategy(BaseIngestionStrategy):
         super().__init__(config)
         self.session: Optional[Session] = None
 
+    def set_session(self, session: Session) -> None:
+        """Set the Snowflake session for this strategy."""
+        self.session = session
+
     def ingest(self, source: DataSource, target: str, **kwargs: Any) -> IngestionResult:
         """Create or refresh Snowpipe."""
         if self.session is None:
@@ -61,7 +65,7 @@ class SnowpipeStrategy(BaseIngestionStrategy):
                 method=IngestionMethod.SNOWPIPE,
                 target_table=target,
                 start_time=start_time,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 metadata={"pipe_name": pipe_name},
             )
         except Exception as e:
@@ -71,7 +75,7 @@ class SnowpipeStrategy(BaseIngestionStrategy):
                 method=IngestionMethod.SNOWPIPE,
                 target_table=target,
                 start_time=start_time,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 error=str(e),
             )
 
@@ -85,13 +89,13 @@ class SnowpipeStrategy(BaseIngestionStrategy):
             ValueError: If required configuration is missing
         """
         if not self.config:
-            raise ValueError("Configuration is required")
+            return False
 
         if not self.config.source or not self.config.source.location:
-            raise ValueError("Source location is required in configuration")
+            return False
 
         if not self.config.target_table:
-            raise ValueError("Target table is required in configuration")
+            return False
 
         return True
 

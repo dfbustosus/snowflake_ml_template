@@ -151,7 +151,16 @@ class IngestionResult:
     def __post_init__(self) -> None:
         """Calculate duration if start and end times are provided."""
         if self.start_time and self.end_time:
-            delta = self.end_time - self.start_time
+            # Normalize timezone awareness to avoid TypeError on subtraction
+            s = self.start_time
+            e = self.end_time
+            if (s.tzinfo is None) != (e.tzinfo is None):
+                # Convert both to naive UTC for consistency
+                if s.tzinfo is not None:
+                    s = s.replace(tzinfo=None)
+                if e.tzinfo is not None:
+                    e = e.replace(tzinfo=None)
+            delta = e - s
             self.duration_seconds = delta.total_seconds()
 
 
@@ -194,7 +203,8 @@ class BaseIngestionStrategy(ABC):
 
         self.config = config
         self.logger = self._get_logger()
-        self.session: Optional[Session] = None
+        # Internal session handle; subclasses may provide their own property wrappers
+        self._session: Optional["Session"] = None
 
     def _get_logger(self) -> Any:
         """Get logger instance.
@@ -273,4 +283,5 @@ class BaseIngestionStrategy(ABC):
         Args:
             session: Active Snowflake session to use for operations
         """
-        self.session = session
+        # Avoid colliding with subclasses that define a read-only 'session' property
+        self._session = session

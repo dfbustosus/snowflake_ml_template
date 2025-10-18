@@ -1,5 +1,7 @@
 """Tests for ML framework trainers."""
 
+import pytest
+
 from snowflake_ml_template.core.base.training import (
     BaseModelConfig,
     MLFramework,
@@ -11,6 +13,7 @@ from snowflake_ml_template.training.frameworks.sklearn_trainer import SklearnTra
 from snowflake_ml_template.training.frameworks.xgboost_trainer import XGBoostTrainer
 
 
+@pytest.fixture
 def training_config():
     """Create training configuration."""
     return TrainingConfig(

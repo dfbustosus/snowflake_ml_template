@@ -59,6 +59,8 @@ def test_registry_init_and_tables_created():
             ("CREATE TABLE IF NOT EXISTS", lambda _: []),
         ]
     )
+    # Instantiate registry to trigger table creation
+    _ = ModelRegistry(sess, "DB", "MODELS")
     assert any(
         "CREATE TABLE IF NOT EXISTS DB.MODELS.MODEL_REGISTRY" in q for q in sess.queries
     )

@@ -73,10 +73,8 @@ class SnowflakeConfig(BaseModel):
         Raises:
             ValueError: If account identifier is invalid
         """
-        if not v or "." not in v:
-            raise ValueError(
-                "Account must be in format <account_identifier>.<region>.<cloud>"
-            )
+        if not v:
+            raise ValueError("Account cannot be empty")
         return v
 
     @field_validator("user")

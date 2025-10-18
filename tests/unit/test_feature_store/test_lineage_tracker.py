@@ -51,6 +51,8 @@ def test_init_creates_tables():
             ("CREATE TABLE IF NOT EXISTS", lambda _: []),
         ]
     )
+    # Instantiate tracker to trigger table creation
+    _ = LineageTracker(sess, "DB", "FEAT")
     assert any("LINEAGE_NODES" in q for q in sess.queries)
     assert any("LINEAGE_EDGES" in q for q in sess.queries)
 
