@@ -60,7 +60,7 @@ def test_create_role_success_and_failure():
     rp_ok = RoleProvisioner(sess_ok)
     assert rp_ok.create_role("R1", comment="c") is True
 
-    sess_fail = StubSession([("CREATE ROLE IF NOT EXISTS BAD", None, True)])
+    sess_fail = StubSession([('CREATE ROLE IF NOT EXISTS "BAD"', None, True)])
     rp_fail = RoleProvisioner(sess_fail)
     with pytest.raises(ConfigurationError):
         rp_fail.create_role("BAD")

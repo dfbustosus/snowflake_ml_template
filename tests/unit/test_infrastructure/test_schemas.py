@@ -81,7 +81,7 @@ def test_create_schema_with_flags_and_failure():
     # failure raises ConfigurationError
     sess_fail = StubSession(
         [
-            ("CREATE SCHEMA IF NOT EXISTS DB.BAD", None, True),
+            ('CREATE SCHEMA IF NOT EXISTS "DB"."BAD"', None, True),
         ]
     )
     sp_fail = SchemaProvisioner(sess_fail)
