@@ -451,7 +451,12 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        return cast(Optional[str], session.get_current_warehouse())
+        warehouse = session.get_current_warehouse()
+        if warehouse is None or isinstance(warehouse, str):
+            return warehouse
+        raise TypeError(
+            "Expected warehouse to be str or None, " f"got {type(warehouse).__name__}"
+        )
 
     @classmethod
     def get_current_database(cls) -> Optional[str]:
@@ -464,7 +469,12 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        return cast(Optional[str], session.get_current_database())
+        database = session.get_current_database()
+        if database is None or isinstance(database, str):
+            return database
+        raise TypeError(
+            "Expected database to be str or None, " f"got {type(database).__name__}"
+        )
 
     @classmethod
     def get_current_schema(cls) -> Optional[str]:
@@ -477,7 +487,12 @@ class SessionManager:
             session = cls.get_session()
         except RuntimeError:
             return None
-        return cast(Optional[str], session.get_current_schema())
+        schema = session.get_current_schema()
+        if schema is None or isinstance(schema, str):
+            return schema
+        raise TypeError(
+            "Expected schema to be str or None, " f"got {type(schema).__name__}"
+        )
 
     @classmethod
     def switch_schema(cls, schema: str) -> None:
