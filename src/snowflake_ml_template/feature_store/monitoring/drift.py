@@ -9,14 +9,15 @@ Drift detection helps identify when feature distributions change,
 which may indicate model degradation or data quality issues.
 """
 
+import json
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from snowflake.snowpark import DataFrame, Session
 from snowflake.snowpark.functions import col
 
-from snowflake_ml_template.core.exceptions import MonitoringError
+from snowflake_ml_template.core.exceptions import FeatureStoreError, MonitoringError
 from snowflake_ml_template.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,17 +74,31 @@ class FeatureDriftDetector:
         ...     print(f"Drift detected! PSI: {result.drift_score}")
     """
 
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        *,
+        database: Optional[str] = None,
+        schema: str = "FEATURE_MONITORING",
+        table: str = "FEATURE_DRIFT_EVENTS",
+    ):
         """Initialize the drift detector.
 
         Args:
             session: Active Snowflake session
+            database: Optional database for persisted drift events
+            schema: Schema used for drift event storage
+            table: Table name for drift events
         """
         if session is None:
             raise ValueError("Session cannot be None")
 
         self.session = session
         self.logger = get_logger(__name__)
+        self._events_fqn: Optional[str] = None
+        if database:
+            self._events_fqn = f"{database}.{schema}.{table}"
+            self._ensure_events_table()
 
     def detect_psi_drift(
         self,
@@ -270,3 +285,98 @@ class FeatureDriftDetector:
         )
 
         return results
+
+    # ------------------------------------------------------------------
+    # Persistence & scheduling helpers
+    # ------------------------------------------------------------------
+    def record_result(
+        self,
+        result: DriftResult,
+        *,
+        feature_view: str,
+        entity: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        """Persist a single drift result if storage is configured."""
+        if not self._events_fqn:
+            self.logger.debug(
+                "Drift persistence disabled", extra={"feature_view": feature_view}
+            )
+            return
+
+        details_json = self._quote_literal(json.dumps(result.details))
+        insert_sql = (
+            f"INSERT INTO {self._events_fqn} (event_timestamp, feature_view, entity, feature_name, run_id, method, drift_score, threshold, drift_detected, details) "
+            "VALUES (CURRENT_TIMESTAMP(), "
+            f"{self._quote_literal(feature_view)}, {self._quote_literal(entity)}, {self._quote_literal(result.feature_name)}, "
+            f"{self._quote_literal(run_id)}, {self._quote_literal(result.method)}, {result.drift_score}, {result.threshold}, {str(result.drift_detected).upper()}, {details_json})"
+        )
+        self._execute_sql(insert_sql)
+
+    def record_results(
+        self,
+        results: List[DriftResult],
+        *,
+        feature_view: str,
+        entity: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        """Persist multiple drift results."""
+        for result in results:
+            self.record_result(
+                result, feature_view=feature_view, entity=entity, run_id=run_id
+            )
+
+    def create_drift_task(
+        self,
+        *,
+        task_name: str,
+        warehouse: str,
+        schedule: str,
+        procedure_call: str,
+    ) -> None:
+        """Create or replace a task that runs drift detection."""
+        if not self._events_fqn:
+            raise FeatureStoreError(
+                "Cannot create drift task without configured events table"
+            )
+
+        task_sql = (
+            f"CREATE OR REPLACE TASK {task_name} WAREHOUSE = {warehouse} "
+            f"SCHEDULE = '{schedule}' AS {procedure_call}"
+        )
+        self._execute_sql(task_sql)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_events_table(self) -> None:
+        if not self._events_fqn:
+            return
+
+        create_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self._events_fqn} (
+            event_timestamp TIMESTAMP_NTZ,
+            feature_view VARCHAR,
+            entity VARCHAR,
+            feature_name VARCHAR,
+            run_id VARCHAR,
+            method VARCHAR,
+            drift_score FLOAT,
+            threshold FLOAT,
+            drift_detected BOOLEAN,
+            details VARIANT
+        )
+        """
+        self._execute_sql(create_sql)
+
+    def _execute_sql(self, sql: str) -> None:
+        self.logger.debug("Executing SQL", extra={"sql": sql})
+        self.session.sql(sql).collect()
+
+    @staticmethod
+    def _quote_literal(value: Optional[str]) -> str:
+        if value is None:
+            return "NULL"
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"

@@ -109,3 +109,77 @@ def test_detect_drift_batch_handles_errors(monkeypatch):
     results = det.detect_drift_batch(good, good, feature_cols=["X", "Y"], threshold=0.1)
     # Should return list with two results (second may log an error and skip)
     assert isinstance(results, list)
+
+
+def test_record_result_inserts_when_configured(monkeypatch):
+    """Verify record_result emits INSERT when persistence configured."""
+    session = StubSession()
+    session.sql = lambda sql: StubCollect([])  # type: ignore[attr-defined]
+    detector = FeatureDriftDetector(
+        session, database="DB", schema="MON", table="DRIFT_EVENTS"
+    )
+
+    # replace execute sql to capture query
+    captured = {}
+
+    def _capture(sql: str):
+        captured["sql"] = sql
+        return StubCollect([])
+
+    detector.session.sql = lambda query: _capture(query)  # type: ignore[assignment]
+
+    result = DriftResult(
+        feature_name="F1",
+        drift_score=0.2,
+        drift_detected=True,
+        threshold=0.1,
+        method="PSI",
+        details={"bins": []},
+    )
+
+    detector.record_result(
+        result, feature_view="FV", entity="CUSTOMER", run_id="run123"
+    )
+    assert "INSERT INTO DB.MON.DRIFT_EVENTS" in captured["sql"]
+    assert "'FV'" in captured["sql"]
+    assert "'F1'" in captured["sql"]
+
+
+def test_create_drift_task_requires_events():
+    """Ensure task creation fails without configured table."""
+    detector = FeatureDriftDetector(StubSession())
+    with pytest.raises(Exception):
+        detector.create_drift_task(
+            task_name="TASK",
+            warehouse="WH",
+            schedule="1 minute",
+            procedure_call="CALL RUN()",
+        )
+
+
+def test_create_drift_task_emits_sql():
+    """Ensure task creation emits expected SQL."""
+    session = StubSession()
+
+    class _SqlCollect:
+        def __init__(self):
+            self.last = None
+
+        def __call__(self, query):
+            self.last = query
+            return StubCollect([])
+
+    collector = _SqlCollect()
+    session.sql = collector  # type: ignore[assignment]
+    detector = FeatureDriftDetector(
+        session, database="DB", schema="MON", table="DRIFT_EVENTS"
+    )
+
+    detector.create_drift_task(
+        task_name="DB.MON.DRIFT_TASK",
+        warehouse="MONITOR_WH",
+        schedule="USING CRON * * * * * UTC",
+        procedure_call="CALL DB.MON.RUN_DRIFT()",
+    )
+
+    assert "CREATE OR REPLACE TASK DB.MON.DRIFT_TASK" in collector.last

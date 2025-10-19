@@ -113,9 +113,18 @@ from snowflake_ml_template.deployment import DeploymentOrchestrator  # noqa: E40
 from snowflake_ml_template.deployment.strategies.warehouse_udf import (  # noqa: E402
     WarehouseUDFStrategy,
 )
-from snowflake_ml_template.feature_store.core import FeatureStore  # noqa: E402
-from snowflake_ml_template.feature_store.core.entity import Entity  # noqa: E402
-from snowflake_ml_template.feature_store.core.feature_view import (  # noqa: E402
+
+try:
+    from snowflake.ml.feature_store import CreationMode
+    from snowflake.ml.feature_store import FeatureStore as SfFeatureStore
+except ImportError as exc:  # pragma: no cover - dependency guard
+    raise ImportError(
+        "snowflake-ml-python with Feature Store support is required to run this pipeline"
+    ) from exc
+
+from snowflake_ml_template.feature_store import (  # noqa: E402
+    Entity,
+    FeatureStore,
     FeatureView,
 )
 from snowflake_ml_template.registry import ModelRegistry, ModelStage  # noqa: E402
@@ -127,6 +136,34 @@ from snowflake_ml_template.training.frameworks.lightgbm_trainer import (  # noqa
 # ======================================================================
 # Step 1: Setup and Configuration
 # ======================================================================
+
+
+def _attach_feature_store_client(session: Session) -> None:
+    """Attach the Snowflake Feature Store client to the session if missing."""
+    if getattr(session, "feature_store", None) is not None:
+        return
+
+    database = os.getenv("SNOWFLAKE_DATABASE")
+    warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
+    fs_schema = os.getenv("SNOWFLAKE_FEATURE_STORE_SCHEMA", "FEATURES")
+
+    if not database:
+        raise RuntimeError(
+            "SNOWFLAKE_DATABASE environment variable is required to initialize the Feature Store client"
+        )
+    if not warehouse:
+        raise RuntimeError(
+            "SNOWFLAKE_WAREHOUSE environment variable is required to initialize the Feature Store client"
+        )
+
+    client = SfFeatureStore(
+        session=session,
+        database=database,
+        name=fs_schema,
+        default_warehouse=warehouse,
+        creation_mode=CreationMode.CREATE_IF_NOT_EXIST,
+    )
+    FeatureStore.attach_feature_store_client(session, client)
 
 
 def create_snowflake_session():
@@ -161,6 +198,7 @@ def create_snowflake_session():
 
     # Create session
     session = Session.builder.configs(connection_parameters).create()
+    _attach_feature_store_client(session)
 
     # Test connection
     try:

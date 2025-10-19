@@ -8,7 +8,7 @@ This module provides data quality monitoring for features, including:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from snowflake.snowpark import DataFrame, Session
 from snowflake.snowpark.functions import avg, col
@@ -16,6 +16,7 @@ from snowflake.snowpark.functions import max as max_
 from snowflake.snowpark.functions import min as min_
 from snowflake.snowpark.functions import stddev
 
+from snowflake_ml_template.core.exceptions import FeatureStoreError
 from snowflake_ml_template.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,17 +74,31 @@ class FeatureQualityMonitor:
         ...     print(f"High null rate: {metrics.null_rate}")
     """
 
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        *,
+        database: Optional[str] = None,
+        schema: str = "FEATURE_MONITORING",
+        table: str = "FEATURE_QUALITY_EVENTS",
+    ):
         """Initialize the quality monitor.
 
         Args:
             session: Active Snowflake session
+            database: Optional database where quality metrics should be stored
+            schema: Schema used for persisted metrics
+            table: Table name for persisted metrics
         """
         if session is None:
             raise ValueError("Session cannot be None")
 
         self.session = session
         self.logger = get_logger(__name__)
+        self._events_fqn: Optional[str] = None
+        if database:
+            self._events_fqn = f"{database}.{schema}.{table}"
+            self._ensure_events_table()
 
     def check_nulls(self, df: DataFrame, feature_col: str) -> int:
         """Check number of nulls in a feature column.
@@ -231,3 +246,124 @@ class FeatureQualityMonitor:
         )
 
         return results
+
+    # ------------------------------------------------------------------
+    # Persistence & scheduling helpers
+    # ------------------------------------------------------------------
+    def record_metrics(
+        self,
+        metrics: QualityMetrics,
+        *,
+        feature_view: str,
+        entity: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        """Persist quality metrics to Snowflake if storage is configured."""
+        if not self._events_fqn:
+            self.logger.debug(
+                "Quality metrics persistence disabled",
+                extra={"feature_view": feature_view},
+            )
+            return
+
+        columns = [
+            "event_timestamp",
+            "feature_view",
+            "entity",
+            "feature_name",
+            "run_id",
+            "total_rows",
+            "null_count",
+            "null_rate",
+            "unique_count",
+            "mean",
+            "std",
+            "min",
+            "max",
+            "quality_score",
+        ]
+        values = [
+            "CURRENT_TIMESTAMP()",
+            self._quote_literal(feature_view),
+            self._quote_literal(entity),
+            self._quote_literal(metrics.feature_name),
+            self._quote_literal(run_id),
+            str(metrics.total_rows),
+            str(metrics.null_count),
+            str(metrics.null_rate),
+            self._nullable_numeric(metrics.unique_count),
+            self._nullable_numeric(metrics.mean),
+            self._nullable_numeric(metrics.std),
+            self._nullable_numeric(metrics.min),
+            self._nullable_numeric(metrics.max),
+            str(metrics.quality_score),
+        ]
+
+        insert_sql = (
+            f"INSERT INTO {self._events_fqn} ({', '.join(columns)}) VALUES ("
+            + ", ".join(values)
+            + ")"
+        )
+        self._execute_sql(insert_sql)
+
+    def create_quality_task(
+        self,
+        *,
+        task_name: str,
+        warehouse: str,
+        schedule: str,
+        procedure_call: str,
+    ) -> None:
+        """Create or replace a Snowflake task that runs quality monitoring."""
+        if not self._events_fqn:
+            raise FeatureStoreError(
+                "Cannot create monitoring task without configured events table"
+            )
+
+        task_sql = (
+            f"CREATE OR REPLACE TASK {task_name} WAREHOUSE = {warehouse} "
+            f"SCHEDULE = '{schedule}' AS {procedure_call}"
+        )
+        self._execute_sql(task_sql)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_events_table(self) -> None:
+        if not self._events_fqn:
+            return
+
+        create_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self._events_fqn} (
+            event_timestamp TIMESTAMP_NTZ,
+            feature_view VARCHAR,
+            entity VARCHAR,
+            feature_name VARCHAR,
+            run_id VARCHAR,
+            total_rows NUMBER,
+            null_count NUMBER,
+            null_rate FLOAT,
+            unique_count NUMBER,
+            mean FLOAT,
+            std FLOAT,
+            min FLOAT,
+            max FLOAT,
+            quality_score FLOAT
+        )
+        """
+        self._execute_sql(create_sql)
+
+    def _execute_sql(self, sql: str) -> None:
+        self.logger.debug("Executing SQL", extra={"sql": sql})
+        self.session.sql(sql).collect()
+
+    @staticmethod
+    def _quote_literal(value: Optional[str]) -> str:
+        if value is None:
+            return "NULL"
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+
+    @staticmethod
+    def _nullable_numeric(value: Optional[Any]) -> str:
+        return "NULL" if value is None else str(value)
