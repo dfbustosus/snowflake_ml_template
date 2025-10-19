@@ -8,6 +8,8 @@ through transformations to features, enabling:
 - Reproducibility
 """
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -103,13 +105,21 @@ class LineageTracker:
         >>> downstream = tracker.get_downstream_lineage("TRANSACTIONS")
     """
 
-    def __init__(self, session: Session, database: str, schema: str):
+    def __init__(
+        self,
+        session: Session,
+        database: str,
+        schema: str,
+        *,
+        enforce_node_validation: bool = False,
+    ):
         """Initialize the lineage tracker.
 
         Args:
             session: Active Snowflake session
             database: Database containing feature store
             schema: Schema containing feature store
+            enforce_node_validation: Whether to enforce node presence checks against Snowflake
         """
         if session is None:
             raise ValueError("Session cannot be None")
@@ -120,6 +130,8 @@ class LineageTracker:
         self.database = database
         self.schema = schema
         self.logger = get_logger(__name__)
+        self._cached_node_ids: set[str] = set()
+        self._enforce_node_validation = enforce_node_validation
 
         self._ensure_lineage_tables_exist()
 
@@ -245,16 +257,17 @@ class LineageTracker:
             json.dumps(node.metadata),
             node.created_at,
         ).collect()
+        self._cached_node_ids.add(node.id)
 
     def _store_edge(self, edge: LineageEdge) -> None:
         """Store a lineage edge in Snowflake."""
-        import hashlib
-        import json
-
         # Generate edge ID from source and target
         edge_id = hashlib.sha256(
             f"{edge.source_id}_{edge.target_id}_{edge.relationship}".encode()
-        ).hexdigest()[:16]
+        ).hexdigest()[:32]
+
+        self._assert_node_exists(edge.source_id)
+        self._assert_node_exists(edge.target_id)
 
         sql = f"""
         INSERT INTO {self.database}.{self.schema}.LINEAGE_EDGES
@@ -275,6 +288,22 @@ class LineageTracker:
             edge.created_at,
             edge_id,
         ).collect()
+
+    def _assert_node_exists(self, node_id: str) -> None:
+        """Ensure a lineage node exists before creating relationships."""
+        if node_id in self._cached_node_ids or not self._enforce_node_validation:
+            return
+
+        sql = f"""
+        SELECT 1
+        FROM {self.database}.{self.schema}.LINEAGE_NODES
+        WHERE node_id = ?
+        LIMIT 1
+        """
+        result = self.session.sql(sql).bind(node_id).collect()
+        if not result:
+            raise ValueError(f"Lineage node '{node_id}' does not exist")
+        self._cached_node_ids.add(node_id)
 
     def get_upstream_lineage(
         self, node_id: str, max_depth: int = 10

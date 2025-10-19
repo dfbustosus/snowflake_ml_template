@@ -23,6 +23,7 @@ class FeatureView:
     description: Optional[str] = None
     owner: Optional[str] = None
     tags: Optional[Dict[str, str]] = None
+    warehouse: Optional[str] = None
     version: str = "v1"
     created_at: datetime = field(default_factory=datetime.utcnow)
     feature_names: List[str] = field(init=False)

@@ -1,70 +1,49 @@
-"""Unit tests for batch feature server."""
+"""Unit tests validating ASOF join SQL generation."""
 
 from snowflake_ml_template.feature_store.serving.batch import BatchFeatureServer
 
 
-class ColumnStub:
-    """Stub column."""
+class SpineStub:
+    """Stub spine DataFrame exposing SQL text."""
 
-    def __init__(self, name):
+    def __init__(self, name: str, columns, sql: str | None = None):
         """Stub init."""
-        self.name = name
+        self.columns = list(columns)
+        self._sql = sql or f"SELECT * FROM {name}"
 
-    def __eq__(self, other):
-        """Stub eq."""
-        return ("eq", self.name, getattr(other, "name", other))
-
-    def __le__(self, other):
-        """Stub le."""
-        return ("le", self.name, getattr(other, "name", other))
-
-    def desc(self):
-        """Stub desc."""
-        return ("desc", self.name)
+    def to_sql(self):
+        """Stub to_sql."""
+        return self._sql
 
 
-class DFStub:
-    """Stub dataframe."""
+class FeatureStub:
+    """Stub feature DataFrame returned by session.table."""
 
-    def __init__(self, name, columns):
+    def __init__(self, columns):
         """Stub init."""
-        self._name = name
-        self.columns = columns[:]
-        self.ops = []
+        self.columns = list(columns)
 
-    def __getitem__(self, key):
-        """Stub get item."""
-        return ColumnStub(key)
 
-    def join(self, other, condition, join_type="left"):
-        """Stub join."""
-        self.ops.append(
-            ("join", other._name if hasattr(other, "_name") else other, join_type)
-        )
-        return self
+class ResultStub:
+    """Stub result returned by session.sql capturing generated SQL."""
 
-    def with_column(self, name, expr):
-        """Stub with column."""
-        self.ops.append(("with_column", name))
-        return self
+    def __init__(self, sql: str):
+        """Stub init."""
+        self.sql = sql
+        self.columns: list[str] = []
 
-    def filter(self, predicate):
-        """Stub filter."""
-        self.ops.append(("filter", predicate))
-        return self
-
-    def drop(self, col):
-        """Stub drop."""
-        self.ops.append(("drop", col))
-        return self
+    def set_columns(self, cols):
+        """Stub set_columns."""
+        self.columns = list(cols)
 
 
 class SessionStub:
-    """Stub session."""
+    """Stub Snowpark session capturing executed SQL statements."""
 
     def __init__(self, tables):
-        """Stub session."""
+        """Stub init."""
         self.tables = tables
+        self.queries: list[str] = []
 
     def table(self, name):
         """Stub table."""
@@ -72,56 +51,31 @@ class SessionStub:
             raise RuntimeError("missing table")
         return self.tables[name]
 
+    def sql(self, query):
+        """Stub sql."""
+        self.queries.append(query)
+        return ResultStub(query)
 
-def test_get_features_asof_join_path_records_expected_ops(monkeypatch):
-    """Test get features asof join path records expected ops."""
-    # Monkeypatch Snowpark Window and row_number to lightweight stubs to avoid type checks
-    import sys
-    import types
 
-    class _SpecStub:
-        """Stub spec."""
-
-        def order_by(self, *args, **kwargs):
-            """Stub order by."""
-            return self
-
-    class _WindowStub:
-        """Stub window."""
-
-        @staticmethod
-        def partition_by(*cols, **kwargs):
-            """Stub partition by."""
-            return _SpecStub()
-
-    class _RowNumber:
-        """Stub row number."""
-
-        def over(self, spec):
-            """Stub over."""
-            return ("row_number_over", spec)
-
-    win_module = types.SimpleNamespace(Window=_WindowStub)
-    monkeypatch.setitem(sys.modules, "snowflake.snowpark.window", win_module)
-    try:
-        import snowflake.snowpark.functions as sfuncs
-
-        monkeypatch.setattr(sfuncs, "row_number", lambda: _RowNumber(), raising=False)
-    except Exception:
-        pass
-    spine = DFStub("spine", ["ENTITY_ID", "TS"])
-    # feature df includes entity, timestamp, and a feature column prefixed with FEATURE_
-    fv = DFStub("fv_table", ["ENTITY_ID", "TS", "FEATURE_A"])
+def test_get_features_asof_join_emits_native_sql():
+    """Ensure ASOF join path produces native LEFT ASOF JOIN SQL."""
+    spine = SpineStub("SPINE", ["ENTITY_ID", "TS"], "SELECT ENTITY_ID, TS FROM SPINE")
+    fv = FeatureStub(["ENTITY_ID", "TS", "FEATURE_A"])
     sess = SessionStub({"DB.FEAT.FEATURE_VIEW_fv_asof": fv})
     bfs = BatchFeatureServer(sess, "DB", "FEAT")
 
-    out = bfs.get_features(
-        spine,
+    result = bfs.get_features(
+        spine_df=spine,
         feature_views=["fv_asof"],
         spine_timestamp_col="TS",
         spine_entity_cols=["ENTITY_ID"],
+        asof_tolerance="INTERVAL '5' MINUTE",
     )
-    assert any(op[0] == "join" for op in out.ops)
-    assert any(op[0] == "with_column" and op[1] == "_row_num" for op in out.ops)
-    assert any(op[0] == "filter" for op in out.ops)
-    assert any(op[0] == "drop" and op[1] == "_row_num" for op in out.ops)
+
+    query = sess.queries[-1]
+    assert "LEFT ASOF JOIN" in query
+    assert "MATCH_CONDITION" in query
+    assert "INTERVAL '5' MINUTE" in query
+    assert 'SPINE_0."ENTITY_ID" = FV_0."ENTITY_ID"' in query
+    assert 'FV_0."TS" <= SPINE_0."TS"' in query
+    assert isinstance(result, ResultStub)
