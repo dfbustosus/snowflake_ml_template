@@ -1,6 +1,6 @@
 """Core FeatureStore implementation."""
 
-import inspect
+import os
 from typing import Any, Dict, List, Optional, cast
 
 from snowflake.snowpark import Session
@@ -56,6 +56,12 @@ class FeatureStore:
         self._entities: Dict[str, Entity] = {}
         self._feature_views: Dict[str, FeatureView] = {}
         self._feature_store_client = getattr(session, "feature_store", None)
+        self._default_warehouse = (
+            getattr(session, "default_warehouse", None)
+            or getattr(self._feature_store_client, "default_warehouse", None)
+            or os.getenv("SNOWFLAKE_WAREHOUSE")
+            or "COMPUTE_WH"
+        )
         self._governance_config: Dict[str, Any] = governance or {}
 
         self._ensure_schema_exists()
@@ -180,8 +186,6 @@ class FeatureStore:
                 desc=entity.description or "",
             )
 
-        signature = inspect.signature(method)
-        parameters = signature.parameters
         call_kwargs = {
             "name": entity.name,
             "join_keys": entity.join_keys,
@@ -190,23 +194,67 @@ class FeatureStore:
             "tags": entity.tags,
         }
 
-        try:
-            if len(parameters) == 1:
-                method(payload_entity)
-            elif "entity" in parameters:
-                method(entity=payload_entity)
-            else:
-                method(**{k: v for k, v in call_kwargs.items() if v is not None})
-        except TypeError as exc:
+        attempts: list[tuple[tuple[Any, ...], dict[str, Any]]] = [
+            ((), {k: v for k, v in call_kwargs.items() if v is not None})
+        ]
+        if _SNOWFLAKE_FS_AVAILABLE and SnowflakeEntity is not None:
+            attempts.append(((), {"entity": payload_entity}))
+            attempts.append(((payload_entity,), {}))
+
+        success = False
+        for args, kwargs in attempts:
+            try:
+                method(*args, **kwargs)
+                success = True
+                break
+            except TypeError:
+                continue
+
+        if not success:
             raise FeatureStoreError(
                 "Feature store client signature mismatch when registering entity"
-            ) from exc
+            )
 
         self._entities[entity.name] = entity
         logger.info(
             "Registered entity",
             extra={"entity": entity.name, "join_keys": entity.join_keys},
         )
+
+    def _resolve_warehouse(self, feature_view: FeatureView) -> Optional[str]:
+        fv_warehouse = getattr(feature_view, "warehouse", None)
+        if fv_warehouse:
+            return cast(Optional[str], fv_warehouse)
+
+        session_wh_callable = getattr(self.session, "get_current_warehouse", None)
+        if callable(session_wh_callable):
+            try:
+                session_wh = session_wh_callable()
+                if isinstance(session_wh, str) and session_wh:
+                    return session_wh
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(
+                    "Failed to resolve session warehouse",
+                    {"error": repr(exc)},
+                )
+
+        for attr in ("warehouse", "default_warehouse"):
+            value = getattr(self.session, attr, None)
+            if isinstance(value, str) and value:
+                return value
+
+        client = self._feature_store_client
+        if client is not None:
+            for attr in ("default_warehouse", "warehouse"):
+                value = getattr(client, attr, None)
+                if isinstance(value, str) and value:
+                    return value
+
+        env_warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
+        if env_warehouse:
+            return env_warehouse
+
+        return self._default_warehouse
 
     def register_feature_view(
         self, feature_view: FeatureView, overwrite: bool = False
@@ -220,20 +268,27 @@ class FeatureStore:
             )
 
         client = self._get_feature_store_client()
+
         query: Optional[str] = None
         if feature_view.is_snowflake_managed:
             query = self._resolve_feature_df_sql(feature_view.feature_df)
             table_name = self._feature_view_table_name(feature_view)
             qualified_name = self._qualify_name(table_name)
-            warehouse_name = (
-                feature_view.warehouse or self.session.get_current_warehouse()
-            )
+
+            warehouse_name = self._resolve_warehouse(feature_view)
             if not warehouse_name:
                 raise FeatureStoreError(
                     "Managed feature views require a warehouse. Set FeatureView.warehouse or ensure the session has an active warehouse."
                 )
-            warehouse_identifier = warehouse_name
-            if not warehouse_identifier.isupper():
+            warehouse_identifier = (
+                warehouse_name
+                if isinstance(warehouse_name, str)
+                else self._quote_identifier(str(warehouse_name))
+            )
+            if (
+                isinstance(warehouse_identifier, str)
+                and not warehouse_identifier.isupper()
+            ):
                 warehouse_identifier = self._quote_identifier(warehouse_identifier)
 
             if overwrite:
@@ -292,15 +347,23 @@ class FeatureStore:
                 )
                 for e in feature_view.entities
             ]
-            default_wh = feature_view.warehouse or self.session.get_current_warehouse()
-            snowflake_payload = SnowflakeFeatureView(
-                name=feature_view.name,
-                entities=sf_entities,
-                feature_df=feature_view.feature_df,
-                refresh_freq=feature_view.refresh_freq,
-                desc=feature_view.description or "",
-                warehouse=default_wh,
+            fv_warehouse = getattr(feature_view, "warehouse", None)
+            session_wh_callable = getattr(self.session, "get_current_warehouse", None)
+            session_wh = (
+                session_wh_callable() if callable(session_wh_callable) else None
             )
+            default_wh = fv_warehouse or session_wh
+            try:
+                snowflake_payload = SnowflakeFeatureView(
+                    name=feature_view.name,
+                    entities=sf_entities,
+                    feature_df=feature_view.feature_df,
+                    refresh_freq=feature_view.refresh_freq,
+                    desc=feature_view.description or "",
+                    warehouse=default_wh,
+                )
+            except Exception:
+                snowflake_payload = None
 
         create_kwargs: Dict[str, Any] = {
             "name": feature_view.name,
@@ -313,33 +376,34 @@ class FeatureStore:
         if query is not None:
             create_kwargs["query"] = query
 
-        signature = inspect.signature(method)
-        parameters = signature.parameters
+        attempts_fv: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        if snowflake_payload is not None:
+            attempts_fv.append(((snowflake_payload,), {}))
+            attempts_fv.append(((snowflake_payload, feature_view.version), {}))
+            attempts_fv.append(
+                (
+                    (),
+                    {
+                        "feature_view": snowflake_payload,
+                        "version": feature_view.version,
+                    },
+                )
+            )
 
-        try:
-            if (
-                snowflake_payload is not None
-                and "feature_view" in parameters
-                and "version" in parameters
-            ):
-                call_kwargs: Dict[str, Any] = {
-                    "feature_view": snowflake_payload,
-                    "version": feature_view.version,
-                }
-                if "overwrite" in parameters:
-                    call_kwargs["overwrite"] = overwrite
-                if "block" in parameters:
-                    call_kwargs["block"] = True
-                method(**call_kwargs)
-            elif snowflake_payload is not None and len(parameters) >= 2:
-                # Fallback positional call
-                method(snowflake_payload, feature_view.version)
-            else:
-                method(**{k: v for k, v in create_kwargs.items() if v is not None})
-        except TypeError as exc:
+        attempts_fv.append(
+            ((), {k: v for k, v in create_kwargs.items() if v is not None})
+        )
+
+        for args, kwargs in attempts_fv:
+            try:
+                method(*args, **kwargs)
+                break
+            except TypeError:
+                continue
+        else:
             raise FeatureStoreError(
                 "Feature store client signature mismatch when registering feature view"
-            ) from exc
+            )
 
         self._feature_views[feature_view.name] = feature_view
         self._apply_feature_view_governance(feature_view)
