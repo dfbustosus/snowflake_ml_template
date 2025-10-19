@@ -1,6 +1,6 @@
 """Batch feature serving with point-in-time correctness using native ASOF JOIN."""
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 from snowflake.snowpark import DataFrame, Session
 
@@ -232,7 +232,7 @@ class BatchFeatureServer:
             c for c in dataset.columns if c not in exclude_cols or c == label_col
         ]
 
-        result = dataset.select(cols_to_keep)
+        result = cast(DataFrame, dataset.select(cols_to_keep))
 
         self.logger.info(
             f"Generated training dataset with {len(feature_views)} feature views",
@@ -271,7 +271,7 @@ class BatchFeatureServer:
             col_name for col_name in dataset.columns if col_name not in cols_to_drop
         ]
 
-        result = dataset.select(projection)
+        result = cast(DataFrame, dataset.select(projection))
 
         self.logger.info(
             "Generated inference dataset",
