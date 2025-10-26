@@ -261,4 +261,3 @@ config/local/
 #*.ipynb
 *.windsurf
 *.csv
-*.ipynb
