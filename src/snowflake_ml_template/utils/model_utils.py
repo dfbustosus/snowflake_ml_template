@@ -167,9 +167,9 @@ def calculate_classification_metrics(
     # Add AUC if probabilities are available
     if predicted_prob_col:
         # Simplified AUC calculation (in practice, use proper implementation)
-        metrics[
-            "auc"
-        ] = 0.5  # Placeholder - proper AUC requires sorting and calculation
+        metrics["auc"] = (
+            0.5  # Placeholder - proper AUC requires sorting and calculation
+        )
 
     return metrics
 
