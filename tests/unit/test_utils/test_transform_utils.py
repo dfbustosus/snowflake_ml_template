@@ -10,9 +10,14 @@ import pytest
 from snowflake.snowpark import Row
 
 from src.snowflake_ml_template.utils.transform_utils import (
+    add_row_number,
     deduplicate_dataframe,
+    fill_nulls,
+    filter_by_condition,
     log_dataframe_info,
     pivot_dataframe,
+    rename_columns,
+    sample_dataframe,
     unpivot_dataframe,
     validate_schema,
 )
@@ -146,3 +151,50 @@ def test_log_dataframe_info_content(snowpark_session, capsys):
     assert "Mocked Schema" in captured.out
     assert "Sample Data:" in captured.out
     assert "[Row('Alice', 30)]" in captured.out
+
+
+def test_fill_nulls(snowpark_session):
+    """Test fill_nulls function."""
+    df = snowpark_session.create_dataframe.return_value
+    df.na.fill.return_value = df
+    filled_df = fill_nulls(df, {"age": 0, "name": "Unknown"})
+    assert filled_df == df
+
+
+def test_rename_columns(snowpark_session):
+    """Test rename_columns function."""
+    df = snowpark_session.create_dataframe.return_value
+    df.withColumnRenamed.return_value = df
+    renamed_df = rename_columns(df, {"old_name": "new_name"})
+    assert renamed_df == df
+
+
+def test_sample_dataframe(snowpark_session):
+    """Test sample_dataframe function."""
+    df = snowpark_session.create_dataframe.return_value
+    df.sample.return_value = df
+    sampled_df = sample_dataframe(df, 0.5, seed=42)
+    assert sampled_df == df
+
+
+def test_sample_dataframe_invalid_fraction(snowpark_session):
+    """Test sample_dataframe with invalid fraction."""
+    df = snowpark_session.create_dataframe.return_value
+    with pytest.raises(ValueError, match="fraction must be between 0 and 1"):
+        sample_dataframe(df, 1.5)
+
+
+def test_add_row_number(snowpark_session):
+    """Test add_row_number function."""
+    df = snowpark_session.create_dataframe.return_value
+    df.withColumn.return_value = df
+    numbered_df = add_row_number(df, partition_by=["group"], order_by=["id"])
+    assert numbered_df == df
+
+
+def test_filter_by_condition(snowpark_session):
+    """Test filter_by_condition function."""
+    df = snowpark_session.create_dataframe.return_value
+    df.filter.return_value = df
+    filtered_df = filter_by_condition(df, "age > 18")
+    assert filtered_df == df
