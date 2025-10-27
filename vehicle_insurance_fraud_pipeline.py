@@ -997,10 +997,10 @@ def test_inference(session, limit: int = 10, label_filter: str | None = None):
         )
         logger.info("\n" + "=" * 80)
         logger.info("📊 BATCH INFERENCE SUMMARY")
-        logger.info(f"{'='*80}")
+        logger.info(f"{'=' * 80}")
         logger.info(f"Total predictions: {len(results)}")
         logger.info(
-            f"Predicted fraud (>=0.5): {positives}/{len(results)} ({100*positives/len(results):.1f}%)"
+            f"Predicted fraud (>=0.5): {positives}/{len(results)} ({100 * positives / len(results):.1f}%)"
         )
 
         # Show sample predictions
@@ -1026,7 +1026,7 @@ def test_inference(session, limit: int = 10, label_filter: str | None = None):
         )
         accuracy = correct / len(results) if results else 0
         logger.info("\n" + "=" * 80)
-        logger.info(f"🎯 Accuracy: {correct}/{len(results)} ({100*accuracy:.1f}%)")
+        logger.info(f"🎯 Accuracy: {correct}/{len(results)} ({100 * accuracy:.1f}%)")
         logger.info("=" * 80 + "\n")
 
     return results
