@@ -48,10 +48,11 @@ def profile_dataframe(df: DataFrame) -> Dict[str, Dict[str, Any]]:
             "total_count": col_stats["TOTAL_COUNT"],
             "distinct_count": col_stats["DISTINCT_COUNT"],
             "null_count": col_stats["NULL_COUNT"],
-            "null_percentage": (col_stats["NULL_COUNT"] / col_stats["TOTAL_COUNT"])
-            * 100
-            if col_stats["TOTAL_COUNT"] > 0
-            else 0,
+            "null_percentage": (
+                (col_stats["NULL_COUNT"] / col_stats["TOTAL_COUNT"]) * 100
+                if col_stats["TOTAL_COUNT"] > 0
+                else 0
+            ),
             "mean": col_stats["MEAN"],
             "stddev": col_stats["STDDEV"],
             "min": col_stats["MIN"],
